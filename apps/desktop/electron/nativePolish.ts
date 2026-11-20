@@ -143,65 +143,74 @@ export function buildNativePolishCss(
 }
 
 /**
- * Low-CPU independent per-app volume controller [0.0, 1.0].
- * Uses native `play` & `loadedmetadata` capture listeners plus a debounced MutationObserver
- * that only reacts when newly added nodes actually contain <audio>/<video> elements —
- * avoiding DOM-churn CPU spikes on fast-moving Twitch chats or Reddit infinite scroll.
+ * Multiplicative per-app volume controller [0.0, 1.0].
+ * Wraps HTMLMediaElement.prototype.volume so OmniDeck scales *on top of* each site's
+ * own volume slider and loudness normalization (e.g. YouTube Music ReplayGain) instead
+ * of overwriting el.volume and fighting the player when tracks change.
  */
 export function buildSetVolumeScript(volume: number): string {
   const safeVol = Math.min(1, Math.max(0, Number.isFinite(volume) ? volume : 1));
   return `(function () {
-    window.__omnideckVolume = ${safeVol};
+    const scale = ${safeVol};
+    window.__omnideckVolumeScale = scale;
+
+    if (!window.__omnideckVolumePatched) {
+      if (scale >= 0.999) return scale;
+      const desc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'volume');
+      if (desc && typeof desc.get === 'function' && typeof desc.set === 'function') {
+        window.__omnideckVolumePatched = true;
+        window.__omnideckNativeVolGet = desc.get;
+        window.__omnideckNativeVolSet = desc.set;
+
+        Object.defineProperty(HTMLMediaElement.prototype, 'volume', {
+          configurable: true,
+          enumerable: desc.enumerable,
+          get: function () {
+            if (typeof this.__odSiteVol === 'number') {
+              return this.__odSiteVol;
+            }
+            return window.__omnideckNativeVolGet.call(this);
+          },
+          set: function (val) {
+            const num = Number(val);
+            if (!Number.isFinite(num)) return;
+            const clamped = Math.min(1, Math.max(0, num));
+            this.__odSiteVol = clamped;
+            const curScale = typeof window.__omnideckVolumeScale === 'number' ? window.__omnideckVolumeScale : 1;
+            window.__omnideckNativeVolSet.call(this, Math.min(1, Math.max(0, clamped * curScale)));
+          }
+        });
+      }
+    }
+
     const applyEl = (el) => {
       try {
-        if (el && typeof el.volume === 'number' && Math.abs(el.volume - window.__omnideckVolume) > 0.01) {
-          el.volume = window.__omnideckVolume;
+        if (!el) return;
+        const nativeGet = window.__omnideckNativeVolGet;
+        const nativeSet = window.__omnideckNativeVolSet;
+        if (nativeGet && nativeSet) {
+          if (typeof el.__odSiteVol !== 'number') {
+            el.__odSiteVol = nativeGet.call(el);
+          }
+          nativeSet.call(el, Math.min(1, Math.max(0, el.__odSiteVol * scale)));
+        } else if (typeof el.volume === 'number') {
+          el.volume = scale;
         }
       } catch {}
     };
-    const applyAll = () => {
-      document.querySelectorAll('audio, video').forEach(applyEl);
-    };
-    applyAll();
-    if (!window.__omnideckVolumeBound) {
-      window.__omnideckVolumeBound = true;
-      const onMediaEvent = (ev) => {
+
+    document.querySelectorAll('audio, video').forEach(applyEl);
+
+    if (!window.__omnideckVolumeEventBound) {
+      window.__omnideckVolumeEventBound = true;
+      document.addEventListener('play', (ev) => {
         if (ev && ev.target && (ev.target.tagName === 'AUDIO' || ev.target.tagName === 'VIDEO')) {
           applyEl(ev.target);
         }
-      };
-      document.addEventListener('play', onMediaEvent, true);
-      document.addEventListener('loadedmetadata', onMediaEvent, true);
-
-      let timer = null;
-      const schedule = () => {
-        if (timer) return;
-        timer = setTimeout(() => {
-          timer = null;
-          applyAll();
-        }, 250);
-      };
-
-      const target = document.body || document.documentElement;
-      if (target) {
-        window.__omnideckVolumeObserver = new MutationObserver((mutations) => {
-          for (let i = 0; i < mutations.length; i++) {
-            const added = mutations[i].addedNodes;
-            for (let j = 0; j < added.length; j++) {
-              const node = added[j];
-              if (node.nodeType !== 1) continue;
-              const tag = node.tagName;
-              if (tag === 'AUDIO' || tag === 'VIDEO' || (node.querySelector && node.querySelector('audio, video'))) {
-                schedule();
-                return;
-              }
-            }
-          }
-        });
-        window.__omnideckVolumeObserver.observe(target, { childList: true, subtree: true });
-      }
+      }, true);
     }
-    return window.__omnideckVolume;
+
+    return scale;
   })();`;
 }
 

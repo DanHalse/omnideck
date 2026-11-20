@@ -89,7 +89,14 @@ export const DEFAULT_SERVICES: ServiceDefinition[] = [
     requiresDrm: false,
     keepAliveInBackground: false,
     mobileUserAgentMode: 'mobile',
-    allowedAuthHosts: ['www.reddit.com', 'old.reddit.com', 'accounts.google.com', 'appleid.apple.com'],
+    allowedAuthHosts: [
+      'www.reddit.com',
+      'old.reddit.com',
+      'sh.reddit.com',
+      'oauth.reddit.com',
+      'accounts.google.com',
+      'appleid.apple.com',
+    ],
     zoomFactor: 1.0,
   },
   {

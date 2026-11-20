@@ -574,6 +574,32 @@ export function buildRedditPowerUpScript(powerUps: PowerUpsConfig): string {
         }
       });
 
+      // Rescue Reddit's logged-out blocking modal loop ("I already have an account" closing & reopening)
+      document.addEventListener('click', (ev) => {
+        try {
+          const target = ev.target && ev.target.closest ? ev.target.closest('button, a') : null;
+          if (!target) return;
+          const label = (target.textContent || '').trim().toLowerCase();
+          if (label === 'i already have an account' || label === 'log in') {
+            const wasInBlockingModal = Boolean(
+              target.closest('#blocking-modal, [id*="blocking-modal"], faceplate-modal, auth-flow-modal')
+            );
+            if (wasInBlockingModal || label === 'i already have an account') {
+              const beforeUrl = location.href;
+              setTimeout(() => {
+                if (location.pathname.startsWith('/login')) return;
+                const loginInput = document.querySelector(
+                  'input[name="username"], #login-username, faceplate-text-input[name="username"], auth-flow-login'
+                );
+                if (!loginInput && location.href === beforeUrl) {
+                  location.href = 'https://www.reddit.com/login/?dest=' + encodeURIComponent(beforeUrl);
+                }
+              }, 650);
+            }
+          }
+        } catch {}
+      }, true);
+
       setInterval(runCleanups, 2500);
     }
   })();`;

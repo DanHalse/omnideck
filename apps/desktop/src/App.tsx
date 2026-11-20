@@ -266,7 +266,7 @@ export function App() {
               void api.windowToggleMaximize();
             }}
           >
-            <div className="rail-titlebar__left no-drag">
+            <div className="rail-titlebar__left">
               <select
                 aria-label="Switch workspace preset"
                 className="workspace-select"
@@ -288,7 +288,7 @@ export function App() {
               {toastMessage && <span className="toast-pill">{toastMessage}</span>}
             </div>
 
-            <div className="topbar__actions no-drag">
+            <div className="topbar__actions">
               {audibleDockOpen && activeService.id === 'audible' && !homeActive && (
                 <button
                   type="button"

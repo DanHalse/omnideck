@@ -17,6 +17,9 @@ describe('Ad & Tracker Shield request filter', () => {
     expect(shouldBlockNetworkRequest('https://myaccount.google.com/intro', 'xhr')).toBe(false);
     expect(shouldBlockNetworkRequest('https://apis.google.com/js/api.js', 'script')).toBe(false);
     expect(shouldBlockNetworkRequest('https://www.gstatic.com/accounts/static/botguard.js', 'script')).toBe(false);
+    expect(shouldBlockNetworkRequest('https://alb.reddit.com/rp.gif', 'xhr')).toBe(false);
+    expect(shouldBlockNetworkRequest('https://www.reddit.com/svc/shreddit/events', 'xhr')).toBe(false);
+    expect(shouldBlockNetworkRequest('https://www.recaptcha.net/recaptcha/api.js', 'script')).toBe(false);
     expect(shouldBlockNetworkRequest('https://sponsor.ajay.app/api/skipSegments/ab12', 'xhr')).toBe(false);
     expect(shouldBlockNetworkRequest('https://cdn.7tv.app/emote/12345/2x.webp', 'image')).toBe(false);
     expect(shouldBlockNetworkRequest('https://cdn.betterttv.net/emote/12345/2x', 'image')).toBe(false);

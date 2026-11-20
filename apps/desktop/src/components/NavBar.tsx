@@ -312,7 +312,7 @@ export function NavBar({
         onWindowToggleMaximize();
       }}
     >
-      <div className="brand-mark no-drag">
+      <div className="brand-mark">
         <button
           type="button"
           id="btn-home-hub"
@@ -336,7 +336,7 @@ export function NavBar({
         </select>
       </div>
 
-      <nav className="topbar__tabs no-drag" role="tablist" aria-orientation="horizontal">
+      <nav className="topbar__tabs" role="tablist" aria-orientation="horizontal">
         {services.map((svc, idx) => {
           const rt = runtime[svc.id];
           const isActive = !homeActive && svc.id === activeServiceId;
@@ -449,7 +449,7 @@ export function NavBar({
         {toastMessage && <span className="toast-pill">{toastMessage}</span>}
       </div>
 
-      <div className="topbar__actions no-drag">
+      <div className="topbar__actions">
         {audibleDockOpen && activeServiceId === 'audible' && !homeActive && (
           <button
             type="button"

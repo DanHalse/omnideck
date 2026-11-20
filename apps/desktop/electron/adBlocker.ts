@@ -11,6 +11,9 @@ const ALLOWLIST_DOMAINS = new Set<string>([
   'myaccount.google.com',
   'apis.google.com',
   'gstatic.com',
+  'recaptcha.net',
+  'hcaptcha.com',
+  'challenges.cloudflare.com',
   'sponsor.ajay.app',
   '7tv.io',
   'cdn.7tv.app',
@@ -37,7 +40,6 @@ const BLOCKED_DOMAINS = new Set<string>([
   'aax.amazon-adsystem.com',
   'fls-na.amazon.com',
   'events.redditmedia.com',
-  'alb.reddit.com',
   'ads-api.twitter.com',
   'analytics.twitter.com',
   'adeventtracker.spotify.com',
@@ -72,12 +74,11 @@ const BLOCKED_URL_PATTERNS: RegExp[] = [
   /youtube\.com\/get_midroll_info/i,
   /youtube\.com\/youtubei\/v1\/log_event/i,
   /spotify\.com\/ad-logic\//i,
-  /reddit\.com\/svc\/shreddit\/events/i,
   /\/pixel\/(track|beacon)/i,
   /[?&]adformat=/i,
 ];
 
-const ALLOWLIST_PATH_RE = /widevine|license|\/eme|oauth|signin|login|auth/i;
+const ALLOWLIST_PATH_RE = /widevine|license|\/eme|oauth|signin|login|auth|recaptcha/i;
 
 function matchesDomainSet(hostname: string, domainSet: Set<string>): boolean {
   const lower = hostname.toLowerCase();

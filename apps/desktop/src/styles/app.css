@@ -65,7 +65,7 @@
 }
 
 .topbar__tabs {
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   display: flex;
   align-items: center;
@@ -1145,6 +1145,18 @@ kbd {
   padding-right: 4px;
 }
 
+.topbar--frameless button,
+.topbar--frameless select,
+.topbar--frameless input,
+.topbar--frameless a,
+.topbar--frameless [role="tab"],
+.rail-titlebar button,
+.rail-titlebar select,
+.rail-titlebar input,
+.rail-titlebar a {
+  -webkit-app-region: no-drag;
+}
+
 .no-drag {
   -webkit-app-region: no-drag;
 }
@@ -1155,12 +1167,14 @@ kbd {
 }
 
 .topbar__drag-spacer {
-  flex: 0 1 auto;
-  min-width: 14px;
+  flex: 1 1 32px;
+  min-width: 24px;
+  height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0 6px;
+  padding: 0 8px;
+  -webkit-app-region: drag;
 }
 
 .toast-pill {
