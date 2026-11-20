@@ -12,27 +12,44 @@ export interface OmniDeckBridge {
   subscribe: (listener: (snapshot: DesktopSnapshot) => void) => () => void;
   onUiCommand: (listener: (command: UiCommandEvent) => void) => () => void;
 
+  // Navigation & Home Hub
+  openHome: () => Promise<DesktopSnapshot>;
   selectService: (serviceId: string) => Promise<DesktopSnapshot>;
+  openServiceUrl: (serviceId: string, url: string, inSplitView?: boolean) => Promise<DesktopSnapshot>;
+  searchInService: (serviceId: string, query: string) => Promise<DesktopSnapshot>;
   goBack: (serviceId: string) => Promise<void>;
   goForward: (serviceId: string) => Promise<void>;
   reload: (serviceId: string, hard?: boolean) => Promise<void>;
   goHome: (serviceId: string) => Promise<void>;
   toggleMute: (serviceId: string) => Promise<DesktopSnapshot>;
   muteAll: () => Promise<DesktopSnapshot>;
+  setVolume: (serviceId: string, volume: number) => Promise<DesktopSnapshot>;
   setZoom: (serviceId: string, zoomFactor: number) => Promise<DesktopSnapshot>;
   hibernateService: (serviceId: string) => Promise<DesktopSnapshot>;
+  hibernateInactive: () => Promise<DesktopSnapshot>;
   wakeService: (serviceId: string) => Promise<DesktopSnapshot>;
   openExternal: (serviceId: string) => Promise<void>;
   openDevTools: (serviceId: string) => Promise<void>;
   clearServiceSession: (serviceId: string) => Promise<DesktopSnapshot>;
 
-  // Unified Media Controls, Smart Audio Switching & PiP
+  // Favorites & Recent History
+  pinCurrentPage: (serviceId: string) => Promise<DesktopSnapshot>;
+  removeFavorite: (favoriteId: string) => Promise<DesktopSnapshot>;
+  clearRecentActivity: () => Promise<DesktopSnapshot>;
+
+  // Unified Media Controls, Smart Audio Switching, Sleep Timer & PiP
   mediaPlayPause: (serviceId?: string) => Promise<DesktopSnapshot>;
   mediaNext: (serviceId?: string) => Promise<void>;
   mediaPrevious: (serviceId?: string) => Promise<void>;
   resumeAutoPaused: () => Promise<DesktopSnapshot>;
+  setSleepTimer: (minutes: number) => Promise<DesktopSnapshot>;
   triggerPip: (serviceId: string) => Promise<void>;
   toggleAlwaysOnTop: () => Promise<DesktopSnapshot>;
+
+  // Native Frameless Window Controls
+  windowMinimize: () => Promise<void>;
+  windowToggleMaximize: () => Promise<void>;
+  windowClose: () => Promise<void>;
 
   // Ad & Tracker Shield
   toggleServiceAdBlock: (serviceId: string) => Promise<DesktopSnapshot>;
@@ -66,6 +83,7 @@ export interface OmniDeckBridge {
         | 'mobileUserAgentMode'
         | 'zoomFactor'
         | 'adBlockEnabled'
+        | 'volume'
       >
     >,
   ) => Promise<DesktopSnapshot>;
@@ -91,4 +109,7 @@ export interface OmniDeckBridge {
 export type UiCommandEvent =
   | { type: 'open-settings' }
   | { type: 'open-service-manager' }
+  | { type: 'open-command-palette' }
+  | { type: 'open-audio-mixer' }
+  | { type: 'toggle-browser-bar' }
   | { type: 'close-overlays' };

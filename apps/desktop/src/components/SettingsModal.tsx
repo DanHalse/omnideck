@@ -267,6 +267,123 @@ export function SettingsModal({
 
             <div className="setting-row">
               <div>
+                <div className="setting-row__title">App Chrome Style</div>
+                <div className="setting-row__desc">
+                  <strong>Zen App</strong> hides the browser URL/nav bar for a pure native feel (toggle anytime with <code>Ctrl+B</code>).
+                </div>
+              </div>
+              <div className="segmented" role="group" aria-label="App chrome style">
+                <button
+                  type="button"
+                  className={`segmented__btn ${settings.appChromeMode === 'zen' ? 'segmented__btn--active' : ''}`}
+                  onClick={() => void onUpdateSettings({ appChromeMode: 'zen' })}
+                >
+                  Zen App
+                </button>
+                <button
+                  type="button"
+                  className={`segmented__btn ${settings.appChromeMode === 'classic' ? 'segmented__btn--active' : ''}`}
+                  onClick={() => void onUpdateSettings({ appChromeMode: 'classic' })}
+                >
+                  Classic Bar
+                </button>
+              </div>
+            </div>
+
+            <div className="setting-row">
+              <div>
+                <div className="setting-row__title">Per-Service Native Polish</div>
+                <div className="setting-row__desc">
+                  Unifies slim scrollbars and hides "Get Desktop App" / "Open in App" nag banners across Spotify, Reddit, YouTube, Twitch &amp; Audible.
+                </div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={settings.nativePolishCss}
+                className={`toggle ${settings.nativePolishCss ? 'toggle--on' : ''}`}
+                onClick={() =>
+                  void onUpdateSettings({ nativePolishCss: !settings.nativePolishCss })
+                }
+              />
+            </div>
+
+            <div className="setting-row">
+              <div>
+                <div className="setting-row__title">Smart Cross-App Link Routing</div>
+                <div className="setting-row__desc">
+                  Clicking a YouTube, Spotify, or Twitch link inside Reddit automatically opens it in its own OmniDeck tab.
+                </div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={settings.smartLinkRouting}
+                className={`toggle ${settings.smartLinkRouting ? 'toggle--on' : ''}`}
+                onClick={() =>
+                  void onUpdateSettings({ smartLinkRouting: !settings.smartLinkRouting })
+                }
+              />
+            </div>
+
+            <div className="setting-row">
+              <div>
+                <div className="setting-row__title">Minimize to System Tray on Close</div>
+                <div className="setting-row__desc">
+                  Closing the window keeps Spotify &amp; Audible running quietly in the tray (summon anytime with <code>{settings.globalSummonShortcut}</code>).
+                </div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={settings.minimizeToTrayOnClose}
+                className={`toggle ${settings.minimizeToTrayOnClose ? 'toggle--on' : ''}`}
+                onClick={() =>
+                  void onUpdateSettings({
+                    minimizeToTrayOnClose: !settings.minimizeToTrayOnClose,
+                  })
+                }
+              />
+            </div>
+
+            <div className="setting-row">
+              <div>
+                <div className="setting-row__title">Restore Last Visited Pages on Launch</div>
+                <div className="setting-row__desc">
+                  Reopens each service right back to the video, stream, subreddit, or audiobook you left off on.
+                </div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={settings.restoreLastPages}
+                className={`toggle ${settings.restoreLastPages ? 'toggle--on' : ''}`}
+                onClick={() =>
+                  void onUpdateSettings({ restoreLastPages: !settings.restoreLastPages })
+                }
+              />
+            </div>
+
+            <div className="setting-row">
+              <div>
+                <div className="setting-row__title">Launch OmniDeck at OS Login</div>
+                <div className="setting-row__desc">
+                  Start OmniDeck automatically when you sign in to Windows or Linux.
+                </div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={settings.launchAtLogin}
+                className={`toggle ${settings.launchAtLogin ? 'toggle--on' : ''}`}
+                onClick={() =>
+                  void onUpdateSettings({ launchAtLogin: !settings.launchAtLogin })
+                }
+              />
+            </div>
+
+            <div className="setting-row">
+              <div>
                 <div className="setting-row__title">Shell Theme</div>
                 <div className="setting-row__desc">Applies to OmniDeck chrome and modals.</div>
               </div>
@@ -559,6 +676,26 @@ export function SettingsModal({
             <h3 className="section-label">Keyboard Shortcuts</h3>
             <div className="kbd-grid">
               <div className="kbd-item">
+                <span>Command &amp; Search Palette</span>
+                <kbd>Ctrl + K</kbd>
+              </div>
+              <div className="kbd-item">
+                <span>OmniDeck Home Hub</span>
+                <kbd>Ctrl + 0</kbd>
+              </div>
+              <div className="kbd-item">
+                <span>Audio Mixer &amp; Sleep Timer</span>
+                <kbd>Ctrl + Shift + V</kbd>
+              </div>
+              <div className="kbd-item">
+                <span>Toggle Browser Tools Bar</span>
+                <kbd>Ctrl + B</kbd>
+              </div>
+              <div className="kbd-item">
+                <span>Summon / Hide Globally</span>
+                <kbd>{settings.globalSummonShortcut}</kbd>
+              </div>
+              <div className="kbd-item">
                 <span>Switch to App 1–9</span>
                 <kbd>Ctrl + 1–9</kbd>
               </div>
@@ -577,18 +714,6 @@ export function SettingsModal({
               <div className="kbd-item">
                 <span>Pin Always on Top</span>
                 <kbd>Ctrl + Shift + T</kbd>
-              </div>
-              <div className="kbd-item">
-                <span>Top Bar / Left Rail</span>
-                <kbd>Ctrl + Shift + L</kbd>
-              </div>
-              <div className="kbd-item">
-                <span>Mute / Unmute App</span>
-                <kbd>Ctrl + M</kbd>
-              </div>
-              <div className="kbd-item">
-                <span>Sleep Active Tab</span>
-                <kbd>Ctrl + Shift + H</kbd>
               </div>
             </div>
           </section>

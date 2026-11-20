@@ -7,13 +7,19 @@ import {
   clipboard,
 } from 'electron';
 import {
+  clampVolume,
   clampZoom,
   computeDesktopLayoutBounds,
   createInitialRuntimeState,
   extractBadgeCountFromTitle,
   isInAppPopupUrl,
+  matchServiceForUrl,
+  recordRecentActivity,
   resolveElectronPartition,
+  selectActiveService,
+  setServiceLastUrl,
   shouldAutoHibernate,
+  toggleSplitView,
   type ChromeInsets,
   type DesktopSnapshot,
   type DrmStatus,
@@ -21,10 +27,16 @@ import {
   type PersistedConfig,
   type ServiceDefinition,
   type ServiceRuntimeState,
+  type SleepTimerState,
   type UpdateState,
 } from '@omnideck/shared';
 import { shouldBlockNetworkRequest } from './adBlocker.js';
 import { buildMediaControlScript, type MediaControlAction } from './mediaScripts.js';
+import {
+  buildNativePolishCss,
+  buildSetVolumeScript,
+  READ_MEDIA_METADATA_SCRIPT,
+} from './nativePolish.js';
 
 const ALLOWED_PERMISSIONS = new Set<string>([
   'media',
@@ -38,11 +50,13 @@ const ALLOWED_PERMISSIONS = new Set<string>([
   'openExternal',
 ]);
 
-/**
- * Generates a clean Chromium desktop User-Agent matching the live Electron Chromium binary,
- * stripping Electron/App tokens so Google Sign-In (YouTube / YT Music) and DRM media players
- * operate smoothly without mismatched version fingerprints.
- */
+interface MediaMeta {
+  title: string;
+  artist?: string;
+  album?: string;
+  artworkUrl?: string;
+}
+
 export function buildCleanDesktopUserAgent(rawUa: string): string {
   const cleaned = rawUa
     .replace(/\sElectron\/[^\s]+/gi, '')
@@ -69,22 +83,31 @@ export class ViewManager {
   private readonly viewPartitions = new Map<string, string>();
   private readonly webContentsToService = new Map<number, string>();
   private readonly runtime = new Map<string, ServiceRuntimeState>();
+  private readonly mediaMeta = new Map<string, MediaMeta>();
   private readonly configuredPartitions = new Set<string>();
   private readonly attachedViewIds = new Set<string>();
   private readonly onSnapshotChanged: (snapshot: DesktopSnapshot) => void;
+  private readonly onConfigUpdated: (nextConfig: PersistedConfig) => void;
 
   private config: PersistedConfig;
   private updateState: UpdateState;
   private overlayOpen = false;
+  private homeActive = false;
   private alwaysOnTop = false;
   private htmlFullscreenServiceId: string | null = null;
   private chromeInsets: ChromeInsets;
+
   private autoHibernateInterval: ReturnType<typeof setInterval> | null = null;
+  private metadataInterval: ReturnType<typeof setInterval> | null = null;
+  private sleepTimerTick: ReturnType<typeof setInterval> | null = null;
+  private sleepTimerState: SleepTimerState = { active: false, endsAt: null, durationMinutes: 0 };
 
   private lastNowPlayingServiceId: string | null = null;
   private autoPausedServiceId: string | null = null;
   private totalBlockedRequests = 0;
   private blockCountEmitTimer: ReturnType<typeof setTimeout> | null = null;
+  private toastMessage: string | null = null;
+  private toastTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     mainWindow: BrowserWindow,
@@ -92,25 +115,38 @@ export class ViewManager {
     drmStatus: DrmStatus,
     initialUpdateState: UpdateState,
     onSnapshotChanged: (snapshot: DesktopSnapshot) => void,
+    onConfigUpdated: (nextConfig: PersistedConfig) => void,
   ) {
     this.mainWindow = mainWindow;
     this.config = initialConfig;
     this.drmStatus = drmStatus;
     this.updateState = initialUpdateState;
     this.onSnapshotChanged = onSnapshotChanged;
+    this.onConfigUpdated = onConfigUpdated;
     this.cleanUserAgent = buildCleanDesktopUserAgent(mainWindow.webContents.getUserAgent());
-    this.chromeInsets = this.defaultInsetsFor(initialConfig.settings.navPosition);
+    this.chromeInsets = this.defaultInsetsFor(initialConfig);
 
     for (const svc of initialConfig.services) {
       this.runtime.set(svc.id, createInitialRuntimeState(svc));
     }
 
     this.bindWindowEvents();
-    this.startAutoHibernateLoop();
+    this.startBackgroundLoops();
   }
 
   setUpdateState(next: UpdateState): void {
     this.updateState = next;
+    this.emitSnapshot();
+  }
+
+  showToast(message: string, durationMs = 2800): void {
+    this.toastMessage = message;
+    if (this.toastTimer) clearTimeout(this.toastTimer);
+    this.toastTimer = setTimeout(() => {
+      this.toastMessage = null;
+      this.toastTimer = null;
+      this.emitSnapshot();
+    }, durationMs);
     this.emitSnapshot();
   }
 
@@ -123,12 +159,16 @@ export class ViewManager {
       config: this.config,
       runtime: runtimeObj,
       nowPlaying: this.computeNowPlaying(),
+      sleepTimer: this.sleepTimerState,
       update: this.updateState,
       drm: this.drmStatus,
       platform: process.platform,
       overlayOpen: this.overlayOpen,
+      homeActive: this.homeActive,
       alwaysOnTop: this.alwaysOnTop,
+      isMaximized: !this.mainWindow.isDestroyed() && this.mainWindow.isMaximized(),
       totalBlockedRequests: this.totalBlockedRequests,
+      toastMessage: this.toastMessage,
     };
   }
 
@@ -141,22 +181,64 @@ export class ViewManager {
     return false;
   }
 
+  setHomeActive(active: boolean): DesktopSnapshot {
+    this.homeActive = active;
+    if (!active) {
+      this.ensureVisibleViewsMounted();
+    }
+    this.relayout();
+    return this.emitSnapshot();
+  }
+
+  openServiceUrl(serviceId: string, url: string, inSplitView = false): DesktopSnapshot {
+    const svc = this.findService(serviceId);
+    if (!svc) return this.getSnapshot();
+
+    this.homeActive = false;
+    let nextConfig = this.config;
+    if (inSplitView && serviceId !== nextConfig.activeServiceId) {
+      nextConfig = toggleSplitView(nextConfig, true, serviceId);
+    } else {
+      nextConfig = selectActiveService(nextConfig, serviceId);
+    }
+
+    this.config = nextConfig;
+    this.onConfigUpdated(nextConfig);
+
+    const rt = this.runtime.get(serviceId);
+    if (rt) {
+      rt.hibernated = false;
+      rt.currentUrl = url;
+      rt.lastActiveAt = Date.now();
+    }
+
+    const view = this.ensureMounted(svc, url);
+    if (view && !view.webContents.isDestroyed() && view.webContents.getURL() !== url) {
+      void view.webContents.loadURL(url).catch(() => {});
+    }
+
+    this.relayout();
+    return this.emitSnapshot();
+  }
+
   toggleAlwaysOnTop(): DesktopSnapshot {
     this.alwaysOnTop = !this.alwaysOnTop;
     if (!this.mainWindow.isDestroyed()) {
       this.mainWindow.setAlwaysOnTop(this.alwaysOnTop, 'floating');
     }
-    return this.emitSnapshot();
+    this.showToast(this.alwaysOnTop ? 'Pinned Always on Top' : 'Unpinned Always on Top', 2000);
+    return this.getSnapshot();
   }
 
   syncConfig(nextConfig: PersistedConfig): DesktopSnapshot {
     const prevShareGoogle = this.config.settings.shareGoogleSession;
     const prevNav = this.config.settings.navPosition;
+    const prevChrome = this.config.settings.appChromeMode;
     const prevBgAudio = this.config.settings.backgroundAudioEnabled;
     this.config = nextConfig;
 
-    if (prevNav !== nextConfig.settings.navPosition) {
-      this.chromeInsets = this.defaultInsetsFor(nextConfig.settings.navPosition);
+    if (prevNav !== nextConfig.settings.navPosition || prevChrome !== nextConfig.settings.appChromeMode) {
+      this.chromeInsets = this.defaultInsetsFor(nextConfig);
     }
 
     const validIds = new Set(nextConfig.services.map((s) => s.id));
@@ -196,7 +278,9 @@ export class ViewManager {
       }
     }
 
-    this.ensureVisibleViewsMounted();
+    if (!this.homeActive) {
+      this.ensureVisibleViewsMounted();
+    }
     this.relayout();
     return this.emitSnapshot();
   }
@@ -253,6 +337,7 @@ export class ViewManager {
   goHome(serviceId: string): void {
     const svc = this.findService(serviceId);
     if (!svc) return;
+    this.homeActive = false;
     const rt = this.runtime.get(serviceId);
     if (rt?.hibernated) {
       rt.currentUrl = svc.url;
@@ -263,6 +348,7 @@ export class ViewManager {
     if (view && !view.webContents.isDestroyed()) {
       void view.webContents.loadURL(svc.url);
     }
+    this.relayout();
   }
 
   toggleMute(serviceId: string): DesktopSnapshot {
@@ -291,6 +377,24 @@ export class ViewManager {
     return this.emitSnapshot();
   }
 
+  setVolume(serviceId: string, rawVolume: number): number {
+    const vol = clampVolume(rawVolume);
+    const rt = this.runtime.get(serviceId);
+    if (rt) {
+      rt.volume = vol;
+      if (vol > 0 && rt.muted) {
+        rt.muted = false;
+        const view = this.views.get(serviceId);
+        if (view && !view.webContents.isDestroyed()) {
+          view.webContents.setAudioMuted(false);
+        }
+      }
+    }
+    this.applyVolumeToView(serviceId, vol);
+    this.emitSnapshot();
+    return vol;
+  }
+
   setZoom(serviceId: string, zoomFactor: number): number {
     const clamped = clampZoom(zoomFactor);
     const rt = this.runtime.get(serviceId);
@@ -303,6 +407,60 @@ export class ViewManager {
     }
     this.emitSnapshot();
     return clamped;
+  }
+
+  setSleepTimer(minutes: number): DesktopSnapshot {
+    if (this.sleepTimerTick) {
+      clearInterval(this.sleepTimerTick);
+      this.sleepTimerTick = null;
+    }
+
+    if (!Number.isFinite(minutes) || minutes <= 0) {
+      this.sleepTimerState = { active: false, endsAt: null, durationMinutes: 0 };
+      this.showToast('Sleep timer cancelled', 2000);
+      return this.getSnapshot();
+    }
+
+    const duration = Math.min(360, Math.max(1, Math.round(minutes)));
+    const endsAt = Date.now() + duration * 60_000;
+    this.sleepTimerState = { active: true, endsAt, durationMinutes: duration };
+    this.showToast(`Sleep timer set for ${duration} min`);
+
+    this.sleepTimerTick = setInterval(() => {
+      if (!this.sleepTimerState.active || !this.sleepTimerState.endsAt) return;
+      const remainingMs = this.sleepTimerState.endsAt - Date.now();
+
+      // Gentle 10-second fade-out before pausing
+      if (remainingMs > 0 && remainingMs <= 10_000) {
+        const factor = Math.max(0.05, remainingMs / 10_000);
+        for (const [id, rt] of this.runtime.entries()) {
+          if (rt.mounted && rt.audible) {
+            this.applyVolumeToView(id, rt.volume * factor);
+          }
+        }
+      }
+
+      if (remainingMs <= 0) {
+        if (this.sleepTimerTick) {
+          clearInterval(this.sleepTimerTick);
+          this.sleepTimerTick = null;
+        }
+        this.sleepTimerState = { active: false, endsAt: null, durationMinutes: 0 };
+
+        for (const [id, rt] of this.runtime.entries()) {
+          if (rt.mounted && rt.audible) {
+            void this.runMediaAction('pause', id).then(() => {
+              this.applyVolumeToView(id, rt.volume);
+            });
+          }
+        }
+        this.showToast('Sleep timer finished — playback paused', 4000);
+      } else {
+        this.emitSnapshot();
+      }
+    }, 1000);
+
+    return this.getSnapshot();
   }
 
   async runMediaAction(action: MediaControlAction, explicitServiceId?: string): Promise<DesktopSnapshot> {
@@ -321,6 +479,9 @@ export class ViewManager {
         if (this.autoPausedServiceId === targetId) {
           this.autoPausedServiceId = null;
         }
+      }
+      if (action === 'pip') {
+        this.showToast('Toggled Picture-in-Picture', 2000);
       }
     } catch {
       // Ignore if page is mid-navigation
@@ -347,6 +508,7 @@ export class ViewManager {
     rt.audible = false;
     rt.canGoBack = false;
     rt.canGoForward = false;
+    this.mediaMeta.delete(serviceId);
 
     if (this.htmlFullscreenServiceId === serviceId) {
       this.htmlFullscreenServiceId = null;
@@ -362,11 +524,39 @@ export class ViewManager {
     return this.emitSnapshot();
   }
 
+  hibernateInactive(): DesktopSnapshot {
+    let count = 0;
+    for (const [id, rt] of this.runtime.entries()) {
+      if (!rt.mounted || rt.hibernated || rt.audible) continue;
+      if (!this.homeActive && id === this.config.activeServiceId) continue;
+      if (
+        !this.homeActive &&
+        this.config.splitView.enabled &&
+        id === this.config.splitView.secondaryServiceId
+      ) {
+        continue;
+      }
+      this.destroyView(id);
+      rt.mounted = false;
+      rt.hibernated = true;
+      rt.loading = false;
+      this.mediaMeta.delete(id);
+      count += 1;
+    }
+    this.relayout();
+    this.showToast(
+      count > 0 ? `Put ${count} inactive tab${count > 1 ? 's' : ''} to sleep` : 'No idle tabs to sleep',
+      2200,
+    );
+    return this.getSnapshot();
+  }
+
   wakeService(serviceId: string): DesktopSnapshot {
     const svc = this.findService(serviceId);
     const rt = this.runtime.get(serviceId);
     if (!svc || !rt) return this.getSnapshot();
 
+    this.homeActive = false;
     rt.hibernated = false;
     rt.lastActiveAt = Date.now();
     this.ensureMounted(svc, rt.currentUrl || svc.url);
@@ -418,35 +608,51 @@ export class ViewManager {
       clearInterval(this.autoHibernateInterval);
       this.autoHibernateInterval = null;
     }
+    if (this.metadataInterval) {
+      clearInterval(this.metadataInterval);
+      this.metadataInterval = null;
+    }
+    if (this.sleepTimerTick) {
+      clearInterval(this.sleepTimerTick);
+      this.sleepTimerTick = null;
+    }
     if (this.blockCountEmitTimer) {
       clearTimeout(this.blockCountEmitTimer);
       this.blockCountEmitTimer = null;
+    }
+    if (this.toastTimer) {
+      clearTimeout(this.toastTimer);
+      this.toastTimer = null;
     }
     for (const id of [...this.views.keys()]) {
       this.destroyView(id);
     }
   }
 
+  private applyVolumeToView(serviceId: string, volume: number): void {
+    const view = this.views.get(serviceId);
+    if (!view || view.webContents.isDestroyed()) return;
+    void view.webContents
+      .executeJavaScript(buildSetVolumeScript(volume), true)
+      .catch(() => {});
+  }
+
   private resolveMediaTargetId(): string | null {
-    // 1. Currently playing & unmuted tab
     for (const [id, rt] of this.runtime.entries()) {
       if (rt.mounted && rt.audible && !rt.muted) {
         return id;
       }
     }
-    // 2. Last known Now Playing tab if still mounted
     if (this.lastNowPlayingServiceId) {
       const rt = this.runtime.get(this.lastNowPlayingServiceId);
       if (rt?.mounted) return this.lastNowPlayingServiceId;
     }
-    // 3. Active tab if mounted
     const activeRt = this.runtime.get(this.config.activeServiceId);
     if (activeRt?.mounted) return this.config.activeServiceId;
     return null;
   }
 
   private computeNowPlaying(): NowPlayingState {
-    // Prefer an actively playing service
     let targetId: string | null = null;
     for (const [id, rt] of this.runtime.entries()) {
       if (rt.mounted && rt.audible) {
@@ -468,17 +674,24 @@ export class ViewManager {
         playing: false,
         title: '',
         muted: false,
+        volume: 1.0,
         autoPausedServiceId: this.autoPausedServiceId,
       };
     }
 
     const rt = this.runtime.get(targetId)!;
     const svc = this.findService(targetId);
+    const meta = this.mediaMeta.get(targetId);
+
     return {
       serviceId: targetId,
       playing: rt.audible,
-      title: rt.pageTitle || svc?.name || targetId,
+      title: meta?.title || rt.pageTitle || svc?.name || targetId,
+      artist: meta?.artist || svc?.name,
+      album: meta?.album,
+      artworkUrl: meta?.artworkUrl,
       muted: rt.muted,
+      volume: rt.volume,
       autoPausedServiceId: this.autoPausedServiceId,
     };
   }
@@ -500,10 +713,24 @@ export class ViewManager {
     }
   }
 
-  private defaultInsetsFor(navPosition: 'top' | 'left'): ChromeInsets {
-    return navPosition === 'top'
-      ? { top: 88, left: 0, splitDividerWidth: 8, splitHeaderHeight: 36 }
-      : { top: 44, left: 72, splitDividerWidth: 8, splitHeaderHeight: 36 };
+  private defaultInsetsFor(cfg: PersistedConfig): ChromeInsets {
+    const isClassic = cfg.settings.appChromeMode === 'classic';
+    if (cfg.settings.navPosition === 'top') {
+      return {
+        top: isClassic ? 84 : 46,
+        left: 0,
+        bottom: 0,
+        splitDividerWidth: 8,
+        splitHeaderHeight: 34,
+      };
+    }
+    return {
+      top: isClassic ? 76 : 38,
+      left: 70,
+      bottom: 0,
+      splitDividerWidth: 8,
+      splitHeaderHeight: 34,
+    };
   }
 
   private findService(serviceId: string): ServiceDefinition | undefined {
@@ -523,7 +750,8 @@ export class ViewManager {
       if (!svc || !rt) continue;
       rt.lastActiveAt = now;
       if (!rt.hibernated) {
-        this.ensureMounted(svc, rt.currentUrl || svc.url);
+        const restoreUrl = this.config.settings.restoreLastPages ? (svc.lastUrl || svc.url) : svc.url;
+        this.ensureMounted(svc, rt.mounted ? rt.currentUrl : restoreUrl);
       }
     }
   }
@@ -552,7 +780,6 @@ export class ViewManager {
       return ALLOWED_PERMISSIONS.has(permission);
     });
 
-    // Network-level Ad & Tracker Shield per session partition
     ses.webRequest.onBeforeRequest((details, callback) => {
       if (!this.config.settings.adBlockerEnabled) {
         callback({ cancel: false });
@@ -624,6 +851,7 @@ export class ViewManager {
     rt.mounted = true;
     rt.hibernated = false;
     rt.loading = true;
+    rt.volume = clampVolume(service.volume ?? rt.volume);
     rt.lastActiveAt = Date.now();
     this.runtime.set(service.id, rt);
 
@@ -652,12 +880,27 @@ export class ViewManager {
       rt.canGoBack = wc.navigationHistory.canGoBack();
       rt.canGoForward = wc.navigationHistory.canGoForward();
       const url = wc.getURL();
-      if (url) rt.currentUrl = url;
       const title = wc.getTitle();
+      if (url) rt.currentUrl = url;
       if (title) {
         rt.pageTitle = title;
         rt.badgeCount = extractBadgeCountFromTitle(title);
       }
+
+      if (url && /^https?:\/\//i.test(url)) {
+        let nextCfg = this.config;
+        if (nextCfg.settings.restoreLastPages) {
+          nextCfg = setServiceLastUrl(nextCfg, service.id, url);
+        }
+        if (title) {
+          nextCfg = recordRecentActivity(nextCfg, { serviceId: service.id, title, url });
+        }
+        if (nextCfg !== this.config) {
+          this.config = nextCfg;
+          this.onConfigUpdated(nextCfg);
+        }
+      }
+
       this.emitSnapshot();
     };
 
@@ -666,6 +909,19 @@ export class ViewManager {
       if (!rt) return;
       rt.loading = true;
       this.emitSnapshot();
+    });
+
+    wc.on('did-finish-load', () => {
+      if (wc.isDestroyed()) return;
+      if (this.config.settings.nativePolishCss) {
+        void wc
+          .insertCSS(buildNativePolishCss(service.id, this.config.settings.theme))
+          .catch(() => {});
+      }
+      const rt = this.runtime.get(service.id);
+      if (rt && rt.volume < 0.99) {
+        this.applyVolumeToView(service.id, rt.volume);
+      }
     });
 
     wc.on('did-stop-loading', () => {
@@ -682,7 +938,29 @@ export class ViewManager {
       if (!rt) return;
       rt.pageTitle = title || service.name;
       rt.badgeCount = extractBadgeCountFromTitle(title || '');
+      if (rt.currentUrl) {
+        const nextCfg = recordRecentActivity(this.config, {
+          serviceId: service.id,
+          title: rt.pageTitle,
+          url: rt.currentUrl,
+        });
+        if (nextCfg !== this.config) {
+          this.config = nextCfg;
+          this.onConfigUpdated(nextCfg);
+        }
+      }
       this.emitSnapshot();
+    });
+
+    // Smart Cross-App Link Routing on in-tab navigations (e.g. clicking YouTube/Spotify inside Reddit)
+    wc.on('will-navigate', (event, url) => {
+      if (!this.config.settings.smartLinkRouting) return;
+      const matched = matchServiceForUrl(url, this.config.services, service.id);
+      if (matched) {
+        event.preventDefault();
+        this.openServiceUrl(matched.id, url);
+        this.showToast(`Opened link in ${matched.name}`);
+      }
     });
 
     wc.on('media-started-playing', () => {
@@ -694,6 +972,7 @@ export class ViewManager {
         this.autoPausedServiceId = null;
       }
       this.handleSmartAudioSwitching(service.id);
+      void this.pollMediaMetadata(service.id);
       this.emitSnapshot();
     });
 
@@ -735,6 +1014,16 @@ export class ViewManager {
         };
       }
 
+      // Smart Cross-App Link Routing for new-tab links (e.g. Reddit -> YouTube/Twitch/Spotify)
+      if (this.config.settings.smartLinkRouting) {
+        const matched = matchServiceForUrl(url, this.config.services, service.id);
+        if (matched) {
+          this.openServiceUrl(matched.id, url);
+          this.showToast(`Opened link in ${matched.name}`);
+          return { action: 'deny' };
+        }
+      }
+
       if (url.startsWith('http://') || url.startsWith('https://')) {
         void shell.openExternal(url);
       }
@@ -749,6 +1038,16 @@ export class ViewManager {
       const items: Electron.MenuItemConstructorOptions[] = [];
 
       if (params.linkURL) {
+        const routedTarget = matchServiceForUrl(params.linkURL, this.config.services, service.id);
+        if (routedTarget) {
+          items.push({
+            label: `Open in ${routedTarget.name} (Split View)`,
+            click: () => {
+              this.openServiceUrl(routedTarget.id, params.linkURL, true);
+              this.showToast(`Opened in Split View with ${routedTarget.name}`);
+            },
+          });
+        }
         items.push(
           {
             label: 'Open Link in External Browser',
@@ -807,6 +1106,30 @@ export class ViewManager {
     });
   }
 
+  private async pollMediaMetadata(serviceId: string): Promise<void> {
+    const view = this.views.get(serviceId);
+    if (!view || view.webContents.isDestroyed()) return;
+    try {
+      const result = (await view.webContents.executeJavaScript(
+        READ_MEDIA_METADATA_SCRIPT,
+        true,
+      )) as MediaMeta | null;
+
+      const prev = this.mediaMeta.get(serviceId);
+      if (
+        result &&
+        (result.title !== prev?.title ||
+          result.artist !== prev?.artist ||
+          result.artworkUrl !== prev?.artworkUrl)
+      ) {
+        this.mediaMeta.set(serviceId, result);
+        this.emitSnapshot();
+      }
+    } catch {
+      // Ignore cross-frame/navigation errors
+    }
+  }
+
   private destroyView(serviceId: string): void {
     const view = this.views.get(serviceId);
     if (!view) return;
@@ -847,7 +1170,7 @@ export class ViewManager {
     if (this.mainWindow.isDestroyed()) return;
     const [contentW, contentH] = this.mainWindow.getContentSize();
 
-    if (this.htmlFullscreenServiceId && !this.overlayOpen) {
+    if (this.htmlFullscreenServiceId && !this.overlayOpen && !this.homeActive) {
       for (const id of this.views.keys()) {
         const isFs = id === this.htmlFullscreenServiceId;
         this.setViewAttached(id, isFs);
@@ -864,7 +1187,7 @@ export class ViewManager {
     const secondaryRt = secondaryId ? this.runtime.get(secondaryId) : undefined;
 
     const bounds = computeDesktopLayoutBounds(contentW, contentH, this.chromeInsets, {
-      overlayOpen: this.overlayOpen,
+      overlayOpen: this.overlayOpen || this.homeActive,
       primaryHibernated: Boolean(primaryRt?.hibernated),
       splitEnabled: Boolean(secondaryId),
       secondaryHibernated: Boolean(secondaryRt?.hibernated),
@@ -885,7 +1208,10 @@ export class ViewManager {
   }
 
   private bindWindowEvents(): void {
-    const onResize = () => this.relayout();
+    const onResize = () => {
+      this.relayout();
+      this.emitSnapshot();
+    };
     this.mainWindow.on('resize', onResize);
     this.mainWindow.on('maximize', onResize);
     this.mainWindow.on('unmaximize', onResize);
@@ -893,7 +1219,7 @@ export class ViewManager {
     this.mainWindow.on('leave-full-screen', onResize);
   }
 
-  private startAutoHibernateLoop(): void {
+  private startBackgroundLoops(): void {
     this.autoHibernateInterval = setInterval(() => {
       const now = Date.now();
       let changed = false;
@@ -909,6 +1235,7 @@ export class ViewManager {
           rt.hibernated = true;
           rt.loading = false;
           rt.audible = false;
+          this.mediaMeta.delete(id);
           changed = true;
         }
       }
@@ -917,6 +1244,17 @@ export class ViewManager {
         this.emitSnapshot();
       }
     }, 60_000);
+
+    // Refresh live track/video/audiobook artwork & artist metadata every 4s for playing media
+    this.metadataInterval = setInterval(() => {
+      const npId = this.resolveMediaTargetId();
+      if (npId) {
+        const rt = this.runtime.get(npId);
+        if (rt?.mounted && rt.audible) {
+          void this.pollMediaMetadata(npId);
+        }
+      }
+    }, 4_000);
   }
 
   private emitSnapshot(): DesktopSnapshot {

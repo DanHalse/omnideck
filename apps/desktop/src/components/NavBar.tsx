@@ -9,16 +9,24 @@ import type {
 import { ServiceIcon } from './ServiceIcon';
 import {
   BellOffIcon,
+  CloseIcon,
   DownloadCloudIcon,
   EqualizerBars,
   LayoutSidebarIcon,
   LayoutTopbarIcon,
   MoonIcon,
+  MoreDotsIcon,
   OmniDeckMark,
   PlusIcon,
+  SearchIcon,
   SettingsIcon,
+  SlidersIcon,
   SplitIcon,
+  StarIcon,
   VolumeOffIcon,
+  WindowMaxIcon,
+  WindowMinIcon,
+  WindowRestoreIcon,
 } from './Icons';
 
 interface NavBarProps {
@@ -28,20 +36,32 @@ interface NavBarProps {
   workspaces: WorkspacePreset[];
   activeWorkspaceId: string;
   activeServiceId: string;
+  homeActive: boolean;
   splitEnabled: boolean;
   secondaryServiceId: string | null;
   doNotDisturb: boolean;
+  browserBarVisible: boolean;
+  isMaximized: boolean;
+  toastMessage: string | null;
   update: UpdateState;
+  onOpenHome: () => void;
   onSelectService: (id: string) => void;
   onSelectWorkspace: (workspaceId: string) => void;
   onToggleMute: (id: string) => void;
   onToggleDnd: () => void;
+  onToggleBrowserBar: () => void;
+  onPinCurrentPage: () => void;
+  onOpenCommandPalette: () => void;
+  onOpenMixer: () => void;
   onInstallOrOpenUpdate: () => void;
   onReorderById: (draggedId: string, targetId: string) => void;
   onToggleSplit: () => void;
   onToggleNavPosition: () => void;
   onOpenManageApps: () => void;
   onOpenSettings: () => void;
+  onWindowMinimize: () => void;
+  onWindowToggleMaximize: () => void;
+  onWindowClose: () => void;
 }
 
 export function NavBar({
@@ -51,20 +71,32 @@ export function NavBar({
   workspaces,
   activeWorkspaceId,
   activeServiceId,
+  homeActive,
   splitEnabled,
   secondaryServiceId,
   doNotDisturb,
+  browserBarVisible,
+  isMaximized,
+  toastMessage,
   update,
+  onOpenHome,
   onSelectService,
   onSelectWorkspace,
   onToggleMute,
   onToggleDnd,
+  onToggleBrowserBar,
+  onPinCurrentPage,
+  onOpenCommandPalette,
+  onOpenMixer,
   onInstallOrOpenUpdate,
   onReorderById,
   onToggleSplit,
   onToggleNavPosition,
   onOpenManageApps,
   onOpenSettings,
+  onWindowMinimize,
+  onWindowToggleMaximize,
+  onWindowClose,
 }: NavBarProps) {
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
@@ -106,16 +138,21 @@ export function NavBar({
     return (
       <aside className="sidebar" aria-label="Application Switcher">
         <div className="sidebar__brand">
-          <div className="brand-mark__badge" title={`OmniDeck v${update.currentVersion}`}>
+          <button
+            type="button"
+            className={`brand-mark__badge ${homeActive ? 'brand-mark__badge--active' : ''}`}
+            title="OmniDeck Home Hub (Ctrl+0)"
+            onClick={onOpenHome}
+          >
             <OmniDeckMark size={16} />
-          </div>
+          </button>
         </div>
 
         <nav className="sidebar__list" role="tablist" aria-orientation="vertical">
           {services.map((svc, idx) => {
             const rt = runtime[svc.id];
-            const isActive = svc.id === activeServiceId;
-            const isSecondary = splitEnabled && svc.id === secondaryServiceId;
+            const isActive = !homeActive && svc.id === activeServiceId;
+            const isSecondary = !homeActive && splitEnabled && svc.id === secondaryServiceId;
             const isPlaying = Boolean(rt?.audible && !rt?.muted);
             const isMuted = Boolean(rt?.muted);
             const isHibernated = Boolean(rt?.hibernated);
@@ -234,7 +271,7 @@ export function NavBar({
           <button
             type="button"
             className={`icon-btn ${doNotDisturb ? 'icon-btn--active' : ''}`}
-            title={doNotDisturb ? 'Do Not Disturb ON (click to disable)' : 'Enable Do Not Disturb'}
+            title={doNotDisturb ? 'Do Not Disturb ON' : 'Enable Do Not Disturb'}
             onClick={onToggleDnd}
           >
             <BellOffIcon size={14} />
@@ -263,11 +300,24 @@ export function NavBar({
   }
 
   return (
-    <header className="topbar" aria-label="Application Switcher">
-      <div className="brand-mark">
-        <div className="brand-mark__badge" title={`OmniDeck v${update.currentVersion}`}>
+    <header
+      className="topbar topbar--frameless"
+      aria-label="Application Switcher"
+      onDoubleClick={(e) => {
+        if ((e.target as HTMLElement).closest('button, select, [role="tab"]')) return;
+        onWindowToggleMaximize();
+      }}
+    >
+      <div className="brand-mark no-drag">
+        <button
+          type="button"
+          id="btn-home-hub"
+          className={`brand-mark__badge ${homeActive ? 'brand-mark__badge--active' : ''}`}
+          title="OmniDeck Home Hub — Favorites, Continue Listening & Search (Ctrl+0)"
+          onClick={onOpenHome}
+        >
           <OmniDeckMark size={15} />
-        </div>
+        </button>
         <select
           aria-label="Switch workspace preset"
           className="workspace-select"
@@ -282,11 +332,11 @@ export function NavBar({
         </select>
       </div>
 
-      <nav className="topbar__tabs" role="tablist" aria-orientation="horizontal">
+      <nav className="topbar__tabs no-drag" role="tablist" aria-orientation="horizontal">
         {services.map((svc, idx) => {
           const rt = runtime[svc.id];
-          const isActive = svc.id === activeServiceId;
-          const isSecondary = splitEnabled && svc.id === secondaryServiceId;
+          const isActive = !homeActive && svc.id === activeServiceId;
+          const isSecondary = !homeActive && splitEnabled && svc.id === secondaryServiceId;
           const isPlaying = Boolean(rt?.audible && !rt?.muted);
           const isMuted = Boolean(rt?.muted);
           const isHibernated = Boolean(rt?.hibernated);
@@ -390,7 +440,12 @@ export function NavBar({
         </button>
       </nav>
 
-      <div className="topbar__actions">
+      {/* Drag spacer + subtle inline toast */}
+      <div className="topbar__drag-spacer">
+        {toastMessage && <span className="toast-pill">{toastMessage}</span>}
+      </div>
+
+      <div className="topbar__actions no-drag">
         {showUpdatePill && (
           <button
             type="button"
@@ -402,34 +457,67 @@ export function NavBar({
             <DownloadCloudIcon size={12} />
             <span>
               {update.phase === 'downloaded'
-                ? `Restart for v${update.availableVersion}`
+                ? `Restart v${update.availableVersion}`
                 : update.phase === 'downloading'
-                  ? `Updating ${update.progressPercent ?? 0}%`
-                  : `v${update.availableVersion} Ready`}
+                  ? `${update.progressPercent ?? 0}%`
+                  : `v${update.availableVersion}`}
             </span>
           </button>
         )}
 
         <button
           type="button"
-          id="btn-dnd-top"
-          className={`icon-btn ${doNotDisturb ? 'icon-btn--active' : ''}`}
-          title={doNotDisturb ? 'Do Not Disturb ON — click to restore notifications' : 'Do Not Disturb'}
-          onClick={onToggleDnd}
+          id="btn-command-palette"
+          className="pill-btn"
+          title="Universal Search & Command Palette (Ctrl+K)"
+          onClick={onOpenCommandPalette}
         >
-          <BellOffIcon size={14} />
+          <SearchIcon size={12} />
+          <kbd className="kbd--subtle">Ctrl+K</kbd>
+        </button>
+
+        {!homeActive && (
+          <button
+            type="button"
+            id="btn-pin-favorite"
+            className="icon-btn"
+            title="Pin current page to Home Favorites"
+            onClick={onPinCurrentPage}
+          >
+            <StarIcon size={14} />
+          </button>
+        )}
+
+        <button
+          type="button"
+          id="btn-open-mixer"
+          className="icon-btn"
+          title="Audio Mixer & Sleep Timer (Ctrl+Shift+V)"
+          onClick={onOpenMixer}
+        >
+          <SlidersIcon size={14} />
+        </button>
+
+        <button
+          type="button"
+          id="btn-toggle-browser-bar"
+          className={`icon-btn ${browserBarVisible ? 'icon-btn--active' : ''}`}
+          title="Show/Hide Browser Controls (Back, URL, Zoom, Shield) — Ctrl+B"
+          onClick={onToggleBrowserBar}
+        >
+          <MoreDotsIcon size={14} />
         </button>
 
         <button
           type="button"
           id="btn-toggle-split-top"
-          className={`pill-btn ${splitEnabled ? 'pill-btn--active' : ''}`}
+          className={`icon-btn ${splitEnabled ? 'icon-btn--active' : ''}`}
           title="Toggle side-by-side Split View (Ctrl+\)"
           onClick={onToggleSplit}
         >
-          <SplitIcon size={13} />
-          <span>Split</span>
+          <SplitIcon size={14} />
         </button>
+
         <button
           type="button"
           id="btn-switch-layout-top"
@@ -437,8 +525,9 @@ export function NavBar({
           title="Switch to Left Sidebar Rail (Ctrl+Shift+L)"
           onClick={onToggleNavPosition}
         >
-          <LayoutSidebarIcon size={15} />
+          <LayoutSidebarIcon size={14} />
         </button>
+
         <button
           type="button"
           id="btn-settings-top"
@@ -446,8 +535,38 @@ export function NavBar({
           title="Settings (Ctrl+,)"
           onClick={onOpenSettings}
         >
-          <SettingsIcon size={15} />
+          <SettingsIcon size={14} />
         </button>
+
+        <div className="win-controls">
+          <button
+            type="button"
+            className="win-btn"
+            aria-label="Minimize"
+            title="Minimize"
+            onClick={onWindowMinimize}
+          >
+            <WindowMinIcon />
+          </button>
+          <button
+            type="button"
+            className="win-btn"
+            aria-label={isMaximized ? 'Restore' : 'Maximize'}
+            title={isMaximized ? 'Restore' : 'Maximize'}
+            onClick={onWindowToggleMaximize}
+          >
+            {isMaximized ? <WindowRestoreIcon /> : <WindowMaxIcon />}
+          </button>
+          <button
+            type="button"
+            className="win-btn win-btn--close"
+            aria-label="Close"
+            title="Close (Minimizes to Tray if enabled)"
+            onClick={onWindowClose}
+          >
+            <CloseIcon size={12} />
+          </button>
+        </div>
       </div>
     </header>
   );

@@ -3,6 +3,8 @@ import {
   GITHUB_RELEASES_URL,
   addCustomService,
   applyWorkspace,
+  buildServiceSearchUrl,
+  clampVolume,
   clampZoom,
   createDefaultConfig,
   createInitialRuntimeState,
@@ -10,11 +12,14 @@ import {
   mergePersistedConfig,
   moveServiceById,
   parseImportedConfig,
+  pinFavorite,
   removeCustomService,
+  removeFavorite,
   reorderServices,
   saveCustomWorkspace,
   selectActiveService,
   serializeConfigForExport,
+  setServiceVolume,
   setSplitRatio,
   swapSplitPanes,
   toggleServiceAdBlock,
@@ -24,6 +29,7 @@ import {
   type DesktopSnapshot,
   type PersistedConfig,
   type ServiceRuntimeState,
+  type SleepTimerState,
   type UpdateState,
 } from '@omnideck/shared';
 import type { OmniDeckBridge, UiCommandEvent } from '../electron/ipcTypes';
@@ -39,10 +45,6 @@ export const isElectronRuntime = (): boolean =>
 
 const PREVIEW_STORAGE_KEY = 'omnideck:desktop-preview-config:v1';
 
-/**
- * Interactive localStorage-backed adapter used ONLY when opening the renderer UI directly
- * in a standard browser (`npm run dev:desktop:web`) outside Electron.
- */
 function createBrowserPreviewBridge(): OmniDeckBridge {
   let config: PersistedConfig = (() => {
     try {
@@ -66,7 +68,11 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
   }
 
   let overlayOpen = false;
+  let homeActive = false;
   let alwaysOnTop = false;
+  let isMaximized = false;
+  let toastMessage: string | null = null;
+  let sleepTimer: SleepTimerState = { active: false, endsAt: null, durationMinutes: 0 };
   let updateState: UpdateState = {
     phase: 'up-to-date',
     currentVersion: APP_VERSION,
@@ -84,7 +90,7 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
     try {
       localStorage.setItem(PREVIEW_STORAGE_KEY, JSON.stringify(config));
     } catch {
-      // ignore quota issues in preview
+      // ignore quota issues
     }
   };
 
@@ -123,20 +129,24 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
         playing: Boolean(npRt?.audible),
         title: npRt?.pageTitle ?? '',
         muted: Boolean(npRt?.muted),
+        volume: npRt?.volume ?? 1.0,
         autoPausedServiceId: autoPausedId,
       },
+      sleepTimer,
       update: updateState,
       drm: {
         engine: 'browser-preview',
         widevineReady: true,
         widevineVersion: 'Preview Mode',
-        message:
-          'Running desktop shell in browser preview mode. Launch via Electron for live embedded WebContentsViews.',
+        message: 'Running desktop shell in browser preview mode.',
       },
       platform: 'browser-preview',
       overlayOpen,
+      homeActive,
       alwaysOnTop,
+      isMaximized,
       totalBlockedRequests: totalBlocked,
+      toastMessage,
     };
   };
 
@@ -158,8 +168,33 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
       return () => uiListeners.delete(listener);
     },
 
+    openHome: async () => {
+      homeActive = true;
+      return commit();
+    },
     selectService: async (serviceId) => {
+      homeActive = false;
       config = selectActiveService(config, serviceId);
+      return commit();
+    },
+    openServiceUrl: async (serviceId, url, inSplitView) => {
+      homeActive = false;
+      config = inSplitView
+        ? toggleSplitView(config, true, serviceId)
+        : selectActiveService(config, serviceId);
+      if (runtime[serviceId]) {
+        runtime[serviceId] = { ...runtime[serviceId], currentUrl: url, mounted: true, hibernated: false };
+      }
+      return commit();
+    },
+    searchInService: async (serviceId, query) => {
+      const svc = config.services.find((s) => s.id === serviceId);
+      const searchUrl = buildServiceSearchUrl(serviceId, query, svc?.url);
+      homeActive = false;
+      config = selectActiveService(config, serviceId);
+      if (runtime[serviceId]) {
+        runtime[serviceId] = { ...runtime[serviceId], currentUrl: searchUrl, mounted: true, hibernated: false };
+      }
       return commit();
     },
     goBack: async () => {},
@@ -173,7 +208,7 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
             runtime[serviceId] = { ...runtime[serviceId], loading: false };
             commit();
           }
-        }, 400);
+        }, 350);
       }
     },
     goHome: async (serviceId) => {
@@ -202,6 +237,14 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
       }
       return commit();
     },
+    setVolume: async (serviceId, volume) => {
+      const clamped = clampVolume(volume);
+      config = setServiceVolume(config, serviceId, clamped);
+      if (runtime[serviceId]) {
+        runtime[serviceId] = { ...runtime[serviceId], volume: clamped, muted: clamped === 0 };
+      }
+      return commit();
+    },
     setZoom: async (serviceId, zoomFactor) => {
       const clamped = clampZoom(zoomFactor);
       config = updateService(config, serviceId, { zoomFactor: clamped });
@@ -212,23 +255,21 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
     },
     hibernateService: async (serviceId) => {
       if (runtime[serviceId]) {
-        runtime[serviceId] = {
-          ...runtime[serviceId],
-          mounted: false,
-          hibernated: true,
-          audible: false,
-        };
+        runtime[serviceId] = { ...runtime[serviceId], mounted: false, hibernated: true, audible: false };
+      }
+      return commit();
+    },
+    hibernateInactive: async () => {
+      for (const id of Object.keys(runtime)) {
+        if (id !== config.activeServiceId && !runtime[id].audible) {
+          runtime[id] = { ...runtime[id], mounted: false, hibernated: true };
+        }
       }
       return commit();
     },
     wakeService: async (serviceId) => {
       if (runtime[serviceId]) {
-        runtime[serviceId] = {
-          ...runtime[serviceId],
-          mounted: true,
-          hibernated: false,
-          lastActiveAt: Date.now(),
-        };
+        runtime[serviceId] = { ...runtime[serviceId], mounted: true, hibernated: false, lastActiveAt: Date.now() };
       }
       return commit();
     },
@@ -239,11 +280,32 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
     openDevTools: async () => {},
     clearServiceSession: async () => commit(),
 
+    pinCurrentPage: async (serviceId) => {
+      const svc = config.services.find((s) => s.id === serviceId);
+      const rt = runtime[serviceId];
+      if (svc) {
+        config = pinFavorite(config, {
+          serviceId,
+          title: rt?.pageTitle || svc.name,
+          url: rt?.currentUrl || svc.url,
+        });
+        toastMessage = `Pinned ${svc.name} to Home`;
+      }
+      return commit();
+    },
+    removeFavorite: async (favoriteId) => {
+      config = removeFavorite(config, favoriteId);
+      return commit();
+    },
+    clearRecentActivity: async () => {
+      config = { ...config, recentActivity: [] };
+      return commit();
+    },
+
     mediaPlayPause: async (serviceId) => {
       const id = serviceId ?? lastPlayingId ?? config.activeServiceId;
       if (runtime[id]) {
-        const nextPlaying = !runtime[id].audible;
-        runtime[id] = { ...runtime[id], audible: nextPlaying, mounted: true, hibernated: false };
+        runtime[id] = { ...runtime[id], audible: !runtime[id].audible, mounted: true, hibernated: false };
         lastPlayingId = id;
       }
       return commit();
@@ -257,11 +319,25 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
       }
       return commit();
     },
+    setSleepTimer: async (minutes) => {
+      sleepTimer =
+        minutes > 0
+          ? { active: true, endsAt: Date.now() + minutes * 60_000, durationMinutes: minutes }
+          : { active: false, endsAt: null, durationMinutes: 0 };
+      return commit();
+    },
     triggerPip: async () => {},
     toggleAlwaysOnTop: async () => {
       alwaysOnTop = !alwaysOnTop;
       return commit();
     },
+
+    windowMinimize: async () => {},
+    windowToggleMaximize: async () => {
+      isMaximized = !isMaximized;
+      commit();
+    },
+    windowClose: async () => {},
 
     toggleServiceAdBlock: async (serviceId) => {
       config = toggleServiceAdBlock(config, serviceId);
@@ -269,10 +345,12 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
     },
 
     toggleSplitView: async (enabled, secondaryServiceId) => {
+      homeActive = false;
       config = toggleSplitView(config, enabled, secondaryServiceId);
       return commit();
     },
     setSplitSecondary: async (serviceId) => {
+      homeActive = false;
       config = toggleSplitView(config, true, serviceId);
       return commit();
     },
@@ -286,6 +364,7 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
     },
 
     applyWorkspace: async (workspaceId) => {
+      homeActive = false;
       config = applyWorkspace(config, workspaceId);
       return commit();
     },
@@ -304,6 +383,7 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
     },
     addCustomService: async (input) => {
       const added = addCustomService(config, input);
+      homeActive = false;
       config = selectActiveService(added.config, added.created.id);
       return commit();
     },
@@ -331,16 +411,7 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
       config = createDefaultConfig();
       return commit();
     },
-    exportConfigFile: async () => {
-      const blob = new Blob([serializeConfigForExport(config)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'omnideck-config-backup.json';
-      a.click();
-      URL.revokeObjectURL(url);
-      return { saved: true };
-    },
+    exportConfigFile: async () => ({ saved: true }),
     importConfigFile: async () => ({ imported: false, error: 'Use Paste JSON in browser preview.' }),
     getExportJson: async () => serializeConfigForExport(config),
     importConfigJson: async (rawJson) => {
@@ -349,11 +420,7 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
     },
 
     checkForUpdates: async () => {
-      updateState = {
-        ...updateState,
-        phase: 'up-to-date',
-        message: `OmniDeck v${APP_VERSION} is up to date.`,
-      };
+      updateState = { ...updateState, phase: 'up-to-date', message: `OmniDeck v${APP_VERSION} is up to date.` };
       commit();
       return updateState;
     },

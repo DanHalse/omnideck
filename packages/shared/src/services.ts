@@ -227,3 +227,109 @@ export const MOBILE_ANDROID_CHROME_UA =
 
 export const DESKTOP_LINUX_CHROME_UA =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.7103.60 Safari/537.36';
+
+/**
+ * Builds a direct search URL (or subreddit jump) for any built-in or custom OmniDeck service.
+ */
+export function buildServiceSearchUrl(serviceId: string, rawQuery: string, fallbackUrl?: string): string {
+  const q = rawQuery.trim();
+  if (!q) return fallbackUrl || 'https://www.youtube.com';
+  const encoded = encodeURIComponent(q);
+
+  switch (serviceId) {
+    case 'youtube':
+      return `https://www.youtube.com/results?search_query=${encoded}`;
+    case 'youtube-music':
+      return `https://music.youtube.com/search?q=${encoded}`;
+    case 'twitch':
+      return `https://www.twitch.tv/search?term=${encoded}`;
+    case 'spotify':
+      return `https://open.spotify.com/search/${encoded}`;
+    case 'reddit': {
+      const subMatch = q.match(/^r\/([a-zA-Z0-9_]+)$/);
+      if (subMatch) {
+        return `https://www.reddit.com/r/${subMatch[1]}/`;
+      }
+      return `https://www.reddit.com/search/?q=${encoded}`;
+    }
+    case 'audible':
+      return `https://www.audible.com/search?keywords=${encoded}`;
+    default:
+      return fallbackUrl || `https://www.google.com/search?q=${encoded}`;
+  }
+}
+
+/**
+ * Matches an outgoing URL to another OmniDeck service for Smart Cross-App Link Routing
+ * (e.g., clicking a YouTube/Spotify/Twitch link inside Reddit opens it directly in its own tab).
+ * Never hijacks OAuth/login endpoints or same-service links.
+ */
+export function matchServiceForUrl(
+  rawUrl: string,
+  services: ServiceDefinition[],
+  sourceServiceId?: string,
+): ServiceDefinition | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    return null;
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  const pathLower = parsed.pathname.toLowerCase();
+
+  // Never hijack OAuth/login/account flows across services
+  if (
+    GLOBAL_AUTH_HOSTS.has(host) ||
+    pathLower.includes('/login') ||
+    pathLower.includes('/signin') ||
+    pathLower.includes('/oauth') ||
+    pathLower.includes('/auth')
+  ) {
+    return null;
+  }
+
+  let matchedId: string | null = null;
+  if (host === 'music.youtube.com') {
+    matchedId = 'youtube-music';
+  } else if (
+    host === 'youtube.com' ||
+    host === 'www.youtube.com' ||
+    host === 'm.youtube.com' ||
+    host === 'youtu.be'
+  ) {
+    matchedId = 'youtube';
+  } else if (host === 'twitch.tv' || host === 'www.twitch.tv' || host === 'm.twitch.tv' || host === 'clips.twitch.tv') {
+    matchedId = 'twitch';
+  } else if (host === 'open.spotify.com' || host === 'spotify.link') {
+    matchedId = 'spotify';
+  } else if (host === 'reddit.com' || host === 'www.reddit.com' || host === 'old.reddit.com' || host === 'redd.it') {
+    matchedId = 'reddit';
+  } else if (host === 'audible.com' || host === 'www.audible.com' || host.endsWith('.audible.com')) {
+    matchedId = 'audible';
+  }
+
+  if (matchedId) {
+    if (matchedId === sourceServiceId) return null;
+    const found = services.find((s) => s.id === matchedId && !s.hidden);
+    if (found) return found;
+  }
+
+  // Also check custom services by exact hostname match
+  for (const svc of services) {
+    if (svc.builtIn || svc.hidden || svc.id === sourceServiceId) continue;
+    try {
+      const svcHost = new URL(svc.url).hostname.toLowerCase();
+      if (host === svcHost) return svc;
+    } catch {
+      // ignore invalid URL
+    }
+  }
+
+  return null;
+}

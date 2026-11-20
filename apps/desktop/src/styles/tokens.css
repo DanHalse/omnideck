@@ -3,11 +3,13 @@
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   /* Chrome geometry constants — synced with Electron ViewManager insets */
-  --topbar-height: 48px;
-  --controlstrip-height: 40px;
-  --sidebar-width: 72px;
-  --sidebar-controlstrip-height: 44px;
-  --split-header-height: 36px;
+  --topbar-height: 46px;
+  --controlstrip-height: 38px;
+  --sidebar-width: 70px;
+  --sidebar-controlstrip-height: 38px;
+  --rail-titlebar-height: 38px;
+  --media-dock-height: 48px;
+  --split-header-height: 34px;
   --split-divider-width: 8px;
 
   --radius-xs: 5px;

@@ -9,19 +9,24 @@ import electron, {
   globalShortcut,
   ipcMain,
   nativeImage,
+  screen,
 } from 'electron';
 import {
   addCustomService,
   applyWorkspace,
+  buildServiceSearchUrl,
   deleteCustomWorkspace,
   getVisibleServices,
   moveServiceById,
   parseImportedConfig,
+  pinFavorite,
   removeCustomService,
+  removeFavorite,
   reorderServices,
   saveCustomWorkspace,
   selectActiveService,
   serializeConfigForExport,
+  setServiceVolume,
   setSplitRatio,
   swapSplitPanes,
   toggleServiceAdBlock,
@@ -34,6 +39,7 @@ import {
   type DesktopSnapshot,
   type DrmStatus,
   type ServiceDefinition,
+  type WindowBounds,
 } from '@omnideck/shared';
 import { ConfigStore } from './store.js';
 import { ViewManager } from './viewManager.js';
@@ -58,6 +64,8 @@ let viewManager: ViewManager | null = null;
 let updateManager: UpdateManager | null = null;
 let forceQuitting = false;
 let mediaKeysRegistered = false;
+let registeredSummonShortcut: string | null = null;
+let saveBoundsTimer: ReturnType<typeof setTimeout> | null = null;
 
 async function initializeWidevineCdm(): Promise<DrmStatus> {
   const ecsComponents = (electron as unknown as { components?: EcsComponentsApi }).components;
@@ -143,6 +151,94 @@ function syncHardwareMediaKeys(enabled: boolean): void {
   }
 }
 
+function syncGlobalSummonShortcut(accelerator: string): void {
+  if (registeredSummonShortcut) {
+    try {
+      globalShortcut.unregister(registeredSummonShortcut);
+    } catch {
+      // ignore
+    }
+    registeredSummonShortcut = null;
+  }
+
+  const trimmed = accelerator.trim();
+  if (!trimmed) return;
+
+  try {
+    const ok = globalShortcut.register(trimmed, () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      if (mainWindow.isVisible() && mainWindow.isFocused()) {
+        mainWindow.hide();
+      } else {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+      }
+    });
+    if (ok) {
+      registeredSummonShortcut = trimmed;
+    }
+  } catch (err) {
+    console.warn('[OmniDeck] Could not register global summon shortcut:', err);
+  }
+}
+
+function syncLaunchAtLogin(enabled: boolean): void {
+  if (!app.isPackaged) return;
+  try {
+    app.setLoginItemSettings({ openAtLogin: enabled });
+  } catch {
+    // Some Linux desktop environments ignore setLoginItemSettings
+  }
+}
+
+function resolveInitialWindowBounds(saved?: WindowBounds): WindowBounds {
+  const fallback: WindowBounds = { width: 1440, height: 920 };
+  if (!saved) return fallback;
+
+  try {
+    const displays = screen.getAllDisplays();
+    if (typeof saved.x === 'number' && typeof saved.y === 'number') {
+      const visibleOnDisplay = displays.some((d) => {
+        const b = d.workArea;
+        return (
+          saved.x! + 100 >= b.x &&
+          saved.x! <= b.x + b.width - 100 &&
+          saved.y! + 60 >= b.y &&
+          saved.y! <= b.y + b.height - 60
+        );
+      });
+      if (visibleOnDisplay) return saved;
+    }
+  } catch {
+    // fallback safely
+  }
+
+  return { width: saved.width || 1440, height: saved.height || 920, maximized: saved.maximized };
+}
+
+function scheduleSaveWindowBounds(): void {
+  if (!mainWindow || !store || mainWindow.isDestroyed()) return;
+  if (saveBoundsTimer) clearTimeout(saveBoundsTimer);
+  saveBoundsTimer = setTimeout(() => {
+    saveBoundsTimer = null;
+    if (!mainWindow || !store || mainWindow.isDestroyed()) return;
+    const isMax = mainWindow.isMaximized();
+    const bounds = isMax ? mainWindow.getNormalBounds() : mainWindow.getBounds();
+    const current = store.get();
+    store.set({
+      ...current,
+      windowBounds: {
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+        maximized: isMax,
+      },
+    });
+  }, 500);
+}
+
 function cycleService(delta: number): void {
   if (!store || !viewManager) return;
   const config = store.get();
@@ -151,6 +247,7 @@ function cycleService(delta: number): void {
   const idx = visible.findIndex((s) => s.id === config.activeServiceId);
   const nextIdx = (idx + delta + visible.length) % visible.length;
   const updated = store.set(selectActiveService(config, visible[nextIdx].id));
+  viewManager.setHomeActive(false);
   viewManager.syncConfig(updated);
 }
 
@@ -161,6 +258,7 @@ function selectServiceSlot(slotIndex: number): void {
   const target = visible[slotIndex];
   if (!target) return;
   const updated = store.set(selectActiveService(config, target.id));
+  viewManager.setHomeActive(false);
   viewManager.syncConfig(updated);
 }
 
@@ -179,6 +277,22 @@ function buildApplicationMenu(): void {
       label: 'OmniDeck',
       submenu: [
         {
+          label: 'Command & Search Palette',
+          accelerator: 'CommandOrControl+K',
+          click: () => sendUiCommand({ type: 'open-command-palette' }),
+        },
+        {
+          label: 'OmniDeck Home Hub',
+          accelerator: 'CommandOrControl+0',
+          click: () => viewManager?.setHomeActive(true),
+        },
+        {
+          label: 'Audio Mixer & Sleep Timer',
+          accelerator: 'CommandOrControl+Shift+V',
+          click: () => sendUiCommand({ type: 'open-audio-mixer' }),
+        },
+        { type: 'separator' },
+        {
           label: 'Check for Updates…',
           click: () => void updateManager?.checkForUpdates(false),
         },
@@ -193,6 +307,11 @@ function buildApplicationMenu(): void {
           click: () => sendUiCommand({ type: 'open-service-manager' }),
         },
         { type: 'separator' },
+        {
+          label: 'Toggle Browser Tools Bar (Zen / Classic)',
+          accelerator: 'CommandOrControl+B',
+          click: () => sendUiCommand({ type: 'toggle-browser-bar' }),
+        },
         {
           label: 'Toggle Top Bar / Left Sidebar',
           accelerator: 'CommandOrControl+Shift+L',
@@ -212,6 +331,7 @@ function buildApplicationMenu(): void {
           accelerator: 'CommandOrControl+\\',
           click: () => {
             if (!store || !viewManager) return;
+            viewManager.setHomeActive(false);
             const updated = store.set(toggleSplitView(store.get()));
             viewManager.syncConfig(updated);
           },
@@ -343,20 +463,31 @@ function refreshTrayMenu(): void {
       },
     },
     {
-      label: snapshot.nowPlaying.playing ? 'Pause Media' : 'Play Media',
+      label: snapshot.nowPlaying.playing
+        ? `Pause (${snapshot.nowPlaying.title.slice(0, 28)})`
+        : 'Play Media',
       enabled: Boolean(snapshot.nowPlaying.serviceId),
       click: () => void viewManager?.runMediaAction('play-pause'),
     },
     { type: 'separator' },
+    {
+      label: 'OmniDeck Home',
+      click: () => {
+        viewManager?.setHomeActive(true);
+        mainWindow?.show();
+        mainWindow?.focus();
+      },
+    },
     ...visible.map((svc) => {
       const rt = snapshot.runtime[svc.id];
       const audioTag = rt?.audible && !rt?.muted ? '  (Playing)' : rt?.muted ? '  (Muted)' : '';
       return {
         label: `${svc.name}${audioTag}`,
         type: 'radio' as const,
-        checked: cfg.activeServiceId === svc.id,
+        checked: !snapshot.homeActive && cfg.activeServiceId === svc.id,
         click: () => {
           if (!store || !viewManager) return;
+          viewManager.setHomeActive(false);
           const updated = store.set(selectActiveService(store.get(), svc.id));
           viewManager.syncConfig(updated);
           mainWindow?.show();
@@ -422,10 +553,26 @@ function createTray(): void {
 function registerIpcHandlers(): void {
   ipcMain.handle('omnideck:get-snapshot', () => viewManager?.getSnapshot());
 
+  ipcMain.handle('omnideck:open-home', () => viewManager?.setHomeActive(true));
+
   ipcMain.handle('omnideck:select-service', (_e, serviceId: string) => {
     if (!store || !viewManager) return null;
+    viewManager.setHomeActive(false);
     const updated = store.set(selectActiveService(store.get(), serviceId));
     return viewManager.syncConfig(updated);
+  });
+
+  ipcMain.handle(
+    'omnideck:open-service-url',
+    (_e, serviceId: string, url: string, inSplitView: boolean) =>
+      viewManager?.openServiceUrl(serviceId, url, inSplitView),
+  );
+
+  ipcMain.handle('omnideck:search-in-service', (_e, serviceId: string, query: string) => {
+    if (!store || !viewManager) return null;
+    const svc = store.get().services.find((s) => s.id === serviceId);
+    const searchUrl = buildServiceSearchUrl(serviceId, query, svc?.url);
+    return viewManager.openServiceUrl(serviceId, searchUrl, false);
   });
 
   ipcMain.handle('omnideck:go-back', (_e, serviceId: string) => viewManager?.goBack(serviceId));
@@ -439,6 +586,13 @@ function registerIpcHandlers(): void {
   );
   ipcMain.handle('omnideck:mute-all', () => viewManager?.muteAll());
 
+  ipcMain.handle('omnideck:set-volume', (_e, serviceId: string, volume: number) => {
+    if (!store || !viewManager) return null;
+    const applied = viewManager.setVolume(serviceId, volume);
+    const updated = store.set(setServiceVolume(store.get(), serviceId, applied));
+    return viewManager.syncConfig(updated);
+  });
+
   ipcMain.handle('omnideck:set-zoom', (_e, serviceId: string, zoomFactor: number) => {
     if (!store || !viewManager) return null;
     const applied = viewManager.setZoom(serviceId, zoomFactor);
@@ -449,6 +603,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle('omnideck:hibernate', (_e, serviceId: string) =>
     viewManager?.hibernateService(serviceId),
   );
+  ipcMain.handle('omnideck:hibernate-inactive', () => viewManager?.hibernateInactive());
   ipcMain.handle('omnideck:wake', (_e, serviceId: string) => viewManager?.wakeService(serviceId));
   ipcMain.handle('omnideck:open-external', (_e, serviceId: string) =>
     viewManager?.openExternal(serviceId),
@@ -460,7 +615,39 @@ function registerIpcHandlers(): void {
     viewManager?.clearServiceSession(serviceId),
   );
 
-  // Unified Media, Smart Audio & PiP
+  // Favorites & Recent History
+  ipcMain.handle('omnideck:pin-current-page', (_e, serviceId: string) => {
+    if (!store || !viewManager) return null;
+    const snap = viewManager.getSnapshot();
+    const rt = snap.runtime[serviceId];
+    const svc = store.get().services.find((s) => s.id === serviceId);
+    if (!svc) return snap;
+    const updated = store.set(
+      pinFavorite(store.get(), {
+        serviceId,
+        title: rt?.pageTitle || svc.name,
+        url: rt?.currentUrl || svc.url,
+      }),
+    );
+    const res = viewManager.syncConfig(updated);
+    viewManager.showToast(`Pinned "${(rt?.pageTitle || svc.name).slice(0, 32)}" to Home`);
+    return res;
+  });
+
+  ipcMain.handle('omnideck:remove-favorite', (_e, favoriteId: string) => {
+    if (!store || !viewManager) return null;
+    const updated = store.set(removeFavorite(store.get(), favoriteId));
+    return viewManager.syncConfig(updated);
+  });
+
+  ipcMain.handle('omnideck:clear-recent', () => {
+    if (!store || !viewManager) return null;
+    const cur = store.get();
+    const updated = store.set({ ...cur, recentActivity: [] });
+    return viewManager.syncConfig(updated);
+  });
+
+  // Unified Media, Smart Audio, Sleep Timer & PiP
   ipcMain.handle('omnideck:media-play-pause', (_e, serviceId?: string) =>
     viewManager?.runMediaAction('play-pause', serviceId),
   );
@@ -471,12 +658,28 @@ function registerIpcHandlers(): void {
     await viewManager?.runMediaAction('previous', serviceId);
   });
   ipcMain.handle('omnideck:resume-auto-paused', () => viewManager?.resumeAutoPaused());
+  ipcMain.handle('omnideck:set-sleep-timer', (_e, minutes: number) =>
+    viewManager?.setSleepTimer(minutes),
+  );
   ipcMain.handle('omnideck:trigger-pip', async (_e, serviceId: string) => {
     await viewManager?.runMediaAction('pip', serviceId);
   });
   ipcMain.handle('omnideck:toggle-always-on-top', () => viewManager?.toggleAlwaysOnTop());
 
-  // Ad & Tracker Shield per-service toggle
+  // Native Frameless Window Controls
+  ipcMain.handle('omnideck:window-minimize', () => {
+    mainWindow?.minimize();
+  });
+  ipcMain.handle('omnideck:window-toggle-maximize', () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMaximized()) mainWindow.unmaximize();
+    else mainWindow.maximize();
+  });
+  ipcMain.handle('omnideck:window-close', () => {
+    mainWindow?.close();
+  });
+
+  // Ad & Tracker Shield
   ipcMain.handle('omnideck:toggle-service-adblock', (_e, serviceId: string) => {
     if (!store || !viewManager) return null;
     const updated = store.set(toggleServiceAdBlock(store.get(), serviceId));
@@ -488,12 +691,14 @@ function registerIpcHandlers(): void {
     'omnideck:toggle-split',
     (_e, enabled?: boolean, secondaryServiceId?: string | null) => {
       if (!store || !viewManager) return null;
+      viewManager.setHomeActive(false);
       const updated = store.set(toggleSplitView(store.get(), enabled, secondaryServiceId));
       return viewManager.syncConfig(updated);
     },
   );
   ipcMain.handle('omnideck:set-split-secondary', (_e, serviceId: string) => {
     if (!store || !viewManager) return null;
+    viewManager.setHomeActive(false);
     const updated = store.set(toggleSplitView(store.get(), true, serviceId));
     return viewManager.syncConfig(updated);
   });
@@ -511,6 +716,7 @@ function registerIpcHandlers(): void {
   // Workspaces
   ipcMain.handle('omnideck:apply-workspace', (_e, workspaceId: string) => {
     if (!store || !viewManager) return null;
+    viewManager.setHomeActive(false);
     const updated = store.set(applyWorkspace(store.get(), workspaceId));
     return viewManager.syncConfig(updated);
   });
@@ -538,12 +744,15 @@ function registerIpcHandlers(): void {
       settings: nextSettings,
     });
     syncHardwareMediaKeys(nextSettings.hardwareMediaKeys);
+    syncGlobalSummonShortcut(nextSettings.globalSummonShortcut);
+    syncLaunchAtLogin(nextSettings.launchAtLogin);
     updateManager?.startSchedule(nextSettings.autoCheckUpdates);
     return viewManager.syncConfig(updated);
   });
 
   ipcMain.handle('omnideck:add-custom-service', (_e, input: CustomServiceInput) => {
     if (!store || !viewManager) return null;
+    viewManager.setHomeActive(false);
     const { config, created } = addCustomService(store.get(), input);
     const selected = selectActiveService(config, created.id);
     const updated = store.set(selected);
@@ -568,6 +777,7 @@ function registerIpcHandlers(): void {
           | 'mobileUserAgentMode'
           | 'zoomFactor'
           | 'adBlockEnabled'
+          | 'volume'
         >
       >,
     ) => {
@@ -605,6 +815,7 @@ function registerIpcHandlers(): void {
     if (!store || !viewManager) return null;
     const updated = store.reset();
     syncHardwareMediaKeys(updated.settings.hardwareMediaKeys);
+    syncGlobalSummonShortcut(updated.settings.globalSummonShortcut);
     return viewManager.syncConfig(updated);
   });
 
@@ -638,6 +849,7 @@ function registerIpcHandlers(): void {
       const parsed = parseImportedConfig(raw);
       const updated = store.set(parsed);
       syncHardwareMediaKeys(updated.settings.hardwareMediaKeys);
+      syncGlobalSummonShortcut(updated.settings.globalSummonShortcut);
       const snapshot = viewManager.syncConfig(updated);
       return { imported: true, snapshot };
     } catch (err) {
@@ -658,6 +870,7 @@ function registerIpcHandlers(): void {
     const parsed = parseImportedConfig(rawJson);
     const updated = store.set(parsed);
     syncHardwareMediaKeys(updated.settings.hardwareMediaKeys);
+    syncGlobalSummonShortcut(updated.settings.globalSummonShortcut);
     return viewManager.syncConfig(updated);
   });
 
@@ -678,16 +891,20 @@ function registerIpcHandlers(): void {
 async function createMainWindow(drmStatus: DrmStatus): Promise<void> {
   store = new ConfigStore();
   const initialConfig = store.get();
+  const bounds = resolveInitialWindowBounds(initialConfig.windowBounds);
 
   updateManager = new UpdateManager((nextUpdate) => {
     viewManager?.setUpdateState(nextUpdate);
   });
 
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 920,
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
     minWidth: 880,
     minHeight: 560,
+    frame: false,
     title: 'OmniDeck',
     icon: resolveAppIconPath(),
     backgroundColor: initialConfig.settings.theme === 'light' ? '#F5F6F8' : '#0E1013',
@@ -700,19 +917,40 @@ async function createMainWindow(drmStatus: DrmStatus): Promise<void> {
     },
   });
 
+  if (bounds.maximized) {
+    mainWindow.maximize();
+  }
+
   viewManager = new ViewManager(
     mainWindow,
     initialConfig,
     drmStatus,
     updateManager.getState(),
     broadcastSnapshot,
+    (nextCfg) => {
+      store?.set(nextCfg);
+    },
   );
 
   syncHardwareMediaKeys(initialConfig.settings.hardwareMediaKeys);
+  syncGlobalSummonShortcut(initialConfig.settings.globalSummonShortcut);
+  syncLaunchAtLogin(initialConfig.settings.launchAtLogin);
   updateManager.startSchedule(initialConfig.settings.autoCheckUpdates);
 
+  mainWindow.on('resize', scheduleSaveWindowBounds);
+  mainWindow.on('move', scheduleSaveWindowBounds);
+
   mainWindow.on('close', (event) => {
-    if (!forceQuitting && store?.get().settings.confirmBeforeQuitWithAudio && viewManager?.hasAudiblePlayback()) {
+    if (forceQuitting) return;
+
+    // Native utility behavior: minimize to system tray so Spotify/Audible keep playing quietly
+    if (store?.get().settings.minimizeToTrayOnClose && tray) {
+      event.preventDefault();
+      mainWindow?.hide();
+      return;
+    }
+
+    if (store?.get().settings.confirmBeforeQuitWithAudio && viewManager?.hasAudiblePlayback()) {
       event.preventDefault();
       const choice = dialog.showMessageBoxSync(mainWindow!, {
         type: 'question',
@@ -769,6 +1007,7 @@ if (!gotSingleInstanceLock) {
 
   app.on('will-quit', () => {
     syncHardwareMediaKeys(false);
+    syncGlobalSummonShortcut('');
     updateManager?.stopSchedule();
   });
 

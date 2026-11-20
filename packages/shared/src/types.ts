@@ -1,6 +1,7 @@
 export type NavPosition = 'top' | 'left';
 export type ThemeMode = 'dark' | 'light';
 export type UserAgentMode = 'auto' | 'desktop' | 'mobile';
+export type AppChromeMode = 'zen' | 'classic';
 
 export type BuiltInIconKey =
   | 'youtube'
@@ -40,6 +41,10 @@ export interface ServiceDefinition {
   zoomFactor?: number;
   /** Whether the network-level ad & tracker blocker is enabled for this service. */
   adBlockEnabled?: boolean;
+  /** Per-service independent audio mixer volume [0.0, 1.0]. */
+  volume?: number;
+  /** Last visited URL restored on restart when restoreLastPages is enabled. */
+  lastUrl?: string;
 }
 
 export interface WorkspacePreset {
@@ -53,6 +58,30 @@ export interface WorkspacePreset {
   secondaryServiceId?: string | null;
 }
 
+export interface PinnedFavorite {
+  id: string;
+  serviceId: string;
+  title: string;
+  url: string;
+  createdAt: number;
+}
+
+export interface RecentActivityItem {
+  id: string;
+  serviceId: string;
+  title: string;
+  url: string;
+  visitedAt: number;
+}
+
+export interface WindowBounds {
+  x?: number;
+  y?: number;
+  width: number;
+  height: number;
+  maximized?: boolean;
+}
+
 export interface SplitViewState {
   enabled: boolean;
   secondaryServiceId: string | null;
@@ -63,6 +92,20 @@ export interface SplitViewState {
 export interface AppSettings {
   navPosition: NavPosition;
   theme: ThemeMode;
+  /** 'zen' hides browser URL/nav chrome for a pure native app feel; 'classic' keeps it pinned open. */
+  appChromeMode: AppChromeMode;
+  /** Inject slim native scrollbars and remove "Install Desktop App" / nag banners per service. */
+  nativePolishCss: boolean;
+  /** Route cross-service links (e.g. YouTube/Spotify/Twitch links inside Reddit) straight into their native OmniDeck tab. */
+  smartLinkRouting: boolean;
+  /** Closing the window minimizes to system tray so background music/audiobooks keep playing. */
+  minimizeToTrayOnClose: boolean;
+  /** Automatically launch OmniDeck when signing into Windows/Linux. */
+  launchAtLogin: boolean;
+  /** Restore each service's last visited page/video/audiobook on app startup. */
+  restoreLastPages: boolean;
+  /** Global OS hotkey to summon or hide OmniDeck instantly from anywhere. */
+  globalSummonShortcut: string;
   /** Share a single persistent Google session ('persist:google') between YouTube & YouTube Music. */
   shareGoogleSession: boolean;
   /** Keep audio-playing services unthrottled when switched to the background. */
@@ -91,6 +134,9 @@ export interface PersistedConfig {
   settings: AppSettings;
   workspaces: WorkspacePreset[];
   activeWorkspaceId: string;
+  pinnedFavorites: PinnedFavorite[];
+  recentActivity: RecentActivityItem[];
+  windowBounds?: WindowBounds;
 }
 
 export interface ServiceRuntimeState {
@@ -100,6 +146,7 @@ export interface ServiceRuntimeState {
   loading: boolean;
   audible: boolean;
   muted: boolean;
+  volume: number;
   canGoBack: boolean;
   canGoForward: boolean;
   currentUrl: string;
@@ -114,8 +161,18 @@ export interface NowPlayingState {
   serviceId: string | null;
   playing: boolean;
   title: string;
+  artist?: string;
+  album?: string;
+  artworkUrl?: string;
   muted: boolean;
+  volume: number;
   autoPausedServiceId: string | null;
+}
+
+export interface SleepTimerState {
+  active: boolean;
+  endsAt: number | null;
+  durationMinutes: number;
 }
 
 export type UpdatePhase =
@@ -150,12 +207,16 @@ export interface DesktopSnapshot {
   config: PersistedConfig;
   runtime: Record<string, ServiceRuntimeState>;
   nowPlaying: NowPlayingState;
+  sleepTimer: SleepTimerState;
   update: UpdateState;
   drm: DrmStatus;
   platform: string;
   overlayOpen: boolean;
+  homeActive: boolean;
   alwaysOnTop: boolean;
+  isMaximized: boolean;
   totalBlockedRequests: number;
+  toastMessage: string | null;
 }
 
 export interface CustomServiceInput {

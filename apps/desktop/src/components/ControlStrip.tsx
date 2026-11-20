@@ -1,89 +1,69 @@
 import {
   GOOGLE_SHARED_SERVICE_IDS,
   type DrmStatus,
-  type NavPosition,
-  type NowPlayingState,
   type ServiceDefinition,
   type ServiceRuntimeState,
 } from '@omnideck/shared';
-import { ServiceIcon } from './ServiceIcon';
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
   ExternalLinkIcon,
   HomeIcon,
   MoonIcon,
-  PauseIcon,
   PinIcon,
   PipIcon,
-  PlayIcon,
   ReloadIcon,
   ShieldIcon,
-  SkipBackIcon,
-  SkipForwardIcon,
-  SplitIcon,
+  StarIcon,
   VolumeIcon,
   VolumeOffIcon,
   WakeIcon,
 } from './Icons';
 
 interface ControlStripProps {
-  navPosition: NavPosition;
   service: ServiceDefinition;
-  allServices: ServiceDefinition[];
   runtime: ServiceRuntimeState;
-  nowPlaying: NowPlayingState;
   drm: DrmStatus;
   shareGoogleSession: boolean;
   adBlockerGlobalEnabled: boolean;
   alwaysOnTop: boolean;
-  splitEnabled: boolean;
   onBack: () => void;
   onForward: () => void;
   onReload: (hard?: boolean) => void;
   onHome: () => void;
+  onPinFavorite: () => void;
   onToggleMute: () => void;
   onSetZoom: (zoom: number) => void;
   onHibernate: () => void;
   onWake: () => void;
-  onToggleSplit: () => void;
   onOpenExternal: () => void;
-  onSelectService: (serviceId: string) => void;
-  onMediaPlayPause: (serviceId?: string) => void;
-  onMediaNext: (serviceId?: string) => void;
-  onMediaPrevious: (serviceId?: string) => void;
-  onResumeAutoPaused: () => void;
   onTriggerPip: () => void;
   onToggleAlwaysOnTop: () => void;
   onToggleServiceAdBlock: () => void;
 }
 
+/**
+ * Slim on-demand Browser & Page Tools strip.
+ * Hidden by default in Zen App Mode so OmniDeck feels like a pure native app;
+ * toggled instantly with `Ctrl+B` or the `•••` button, or pinned in Classic Mode.
+ */
 export function ControlStrip({
-  navPosition,
   service,
-  allServices,
   runtime,
-  nowPlaying,
   drm,
   shareGoogleSession,
   adBlockerGlobalEnabled,
   alwaysOnTop,
-  splitEnabled,
   onBack,
   onForward,
   onReload,
   onHome,
+  onPinFavorite,
   onToggleMute,
   onSetZoom,
   onHibernate,
   onWake,
-  onToggleSplit,
   onOpenExternal,
-  onSelectService,
-  onMediaPlayPause,
-  onMediaNext,
-  onMediaPrevious,
-  onResumeAutoPaused,
   onTriggerPip,
   onToggleAlwaysOnTop,
   onToggleServiceAdBlock,
@@ -92,15 +72,8 @@ export function ControlStrip({
   const zoomPercent = Math.round((runtime.zoomFactor || 1) * 100);
   const shieldActive = adBlockerGlobalEnabled && service.adBlockEnabled !== false;
 
-  const npService = nowPlaying.serviceId
-    ? allServices.find((s) => s.id === nowPlaying.serviceId)
-    : undefined;
-  const autoPausedService = nowPlaying.autoPausedServiceId
-    ? allServices.find((s) => s.id === nowPlaying.autoPausedServiceId)
-    : undefined;
-
   return (
-    <div className="control-strip" role="toolbar" aria-label={`${service.name} controls`}>
+    <div className="control-strip" role="toolbar" aria-label={`${service.name} page tools`}>
       <div className="control-group">
         <button
           type="button"
@@ -163,61 +136,16 @@ export function ControlStrip({
         )}
       </div>
 
-      {/* Unified Now Playing Mini-Controller */}
-      {npService && (
-        <div className="now-playing-pill" aria-label="Now Playing Controls">
-          <button
-            type="button"
-            className="now-playing-pill__source"
-            title={`Jump to ${npService.name}: ${nowPlaying.title}`}
-            onClick={() => onSelectService(npService.id)}
-          >
-            <ServiceIcon icon={npService.icon} size={13} color={npService.accentColor} />
-            <span className="now-playing-pill__title">
-              {nowPlaying.title || npService.name}
-            </span>
-          </button>
-
-          <button
-            type="button"
-            className="icon-btn icon-btn--sm"
-            title="Previous track (MediaPreviousTrack)"
-            onClick={() => onMediaPrevious(npService.id)}
-          >
-            <SkipBackIcon size={11} />
-          </button>
-          <button
-            type="button"
-            className="icon-btn icon-btn--sm"
-            title={nowPlaying.playing ? 'Pause (Ctrl+Shift+Space)' : 'Play (Ctrl+Shift+Space)'}
-            onClick={() => onMediaPlayPause(npService.id)}
-          >
-            {nowPlaying.playing ? <PauseIcon size={11} /> : <PlayIcon size={11} />}
-          </button>
-          <button
-            type="button"
-            className="icon-btn icon-btn--sm"
-            title="Next track (MediaNextTrack)"
-            onClick={() => onMediaNext(npService.id)}
-          >
-            <SkipForwardIcon size={11} />
-          </button>
-        </div>
-      )}
-
-      {autoPausedService && (
+      <div className="control-group">
         <button
           type="button"
-          className="pill-btn"
-          title={`Smart Audio Switching paused ${autoPausedService.name} — click to resume`}
-          onClick={onResumeAutoPaused}
+          className="icon-btn"
+          title="Pin this page to Home Favorites"
+          onClick={onPinFavorite}
         >
-          <PlayIcon size={10} />
-          <span>Resume {autoPausedService.shortName}</span>
+          <StarIcon size={13} />
         </button>
-      )}
 
-      <div className="control-group">
         <button
           type="button"
           id="btn-adblock-toggle"
@@ -320,19 +248,6 @@ export function ControlStrip({
             onClick={onHibernate}
           >
             <MoonIcon />
-          </button>
-        )}
-
-        {navPosition === 'left' && (
-          <button
-            type="button"
-            id="btn-toggle-split-strip"
-            className={`pill-btn ${splitEnabled ? 'pill-btn--active' : ''}`}
-            title="Toggle side-by-side Split View (Ctrl+\)"
-            onClick={onToggleSplit}
-          >
-            <SplitIcon size={13} />
-            <span>Split</span>
           </button>
         )}
 

@@ -4,13 +4,16 @@ import type {
   ChromeInsets,
   CustomServiceInput,
   PersistedConfig,
+  PinnedFavorite,
+  RecentActivityItem,
   ServiceDefinition,
   ServiceRuntimeState,
   StageLayoutMetrics,
+  WindowBounds,
   WorkspacePreset,
 } from './types.js';
 
-export const APP_VERSION = '1.1.0';
+export const APP_VERSION = '1.2.0';
 export const GITHUB_REPO_OWNER = 'DanHalse';
 export const GITHUB_REPO_NAME = 'omnideck';
 export const GITHUB_RELEASES_URL = `https://github.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases`;
@@ -18,6 +21,13 @@ export const GITHUB_RELEASES_URL = `https://github.com/${GITHUB_REPO_OWNER}/${GI
 export const DEFAULT_SETTINGS: AppSettings = {
   navPosition: 'top',
   theme: 'dark',
+  appChromeMode: 'zen',
+  nativePolishCss: true,
+  smartLinkRouting: true,
+  minimizeToTrayOnClose: true,
+  launchAtLogin: false,
+  restoreLastPages: true,
+  globalSummonShortcut: 'CommandOrControl+Alt+O',
   shareGoogleSession: true,
   backgroundAudioEnabled: true,
   autoHibernateMinutes: 30,
@@ -65,6 +75,7 @@ export function createDefaultConfig(): PersistedConfig {
     services: DEFAULT_SERVICES.map((svc) => ({
       ...svc,
       adBlockEnabled: svc.adBlockEnabled ?? true,
+      volume: svc.volume ?? 1.0,
       allowedAuthHosts: svc.allowedAuthHosts ? [...svc.allowedAuthHosts] : undefined,
     })),
     activeServiceId: DEFAULT_SERVICES[0].id,
@@ -76,6 +87,8 @@ export function createDefaultConfig(): PersistedConfig {
     settings: { ...DEFAULT_SETTINGS },
     workspaces: DEFAULT_WORKSPACES.map((w) => ({ ...w, serviceIds: [...w.serviceIds] })),
     activeWorkspaceId: 'all',
+    pinnedFavorites: [],
+    recentActivity: [],
   };
 }
 
@@ -87,9 +100,10 @@ export function createInitialRuntimeState(service: ServiceDefinition): ServiceRu
     loading: false,
     audible: false,
     muted: false,
+    volume: clampVolume(service.volume ?? 1.0),
     canGoBack: false,
     canGoForward: false,
-    currentUrl: service.url,
+    currentUrl: service.lastUrl || service.url,
     pageTitle: service.name,
     zoomFactor: clampZoom(service.zoomFactor ?? 1.0),
     lastActiveAt: 0,
@@ -150,13 +164,18 @@ export function clampZoom(zoom: number): number {
   return Math.min(2.0, Math.max(0.5, Math.round(zoom * 20) / 20));
 }
 
+export function clampVolume(volume: number): number {
+  if (!Number.isFinite(volume)) return 1.0;
+  return Math.min(1.0, Math.max(0.0, Math.round(volume * 100) / 100));
+}
+
 export function getVisibleServices(config: PersistedConfig): ServiceDefinition[] {
   return config.services.filter((s) => !s.hidden);
 }
 
 /**
- * Safely hydrates a previously persisted JSON object, ensuring any newly introduced default
- * fields exist while preserving the user's ordering, visibility, custom services, workspaces, and settings.
+ * Safely hydrates a previously persisted JSON object, upgrading older v1.0/v1.1 configs seamlessly
+ * while preserving user ordering, visibility, custom services, workspaces, favorites, and settings.
  */
 export function mergePersistedConfig(raw: unknown): PersistedConfig {
   const fallback = createDefaultConfig();
@@ -168,6 +187,32 @@ export function mergePersistedConfig(raw: unknown): PersistedConfig {
   const settings: AppSettings = {
     navPosition: candidate.settings?.navPosition === 'left' ? 'left' : 'top',
     theme: candidate.settings?.theme === 'light' ? 'light' : 'dark',
+    appChromeMode: candidate.settings?.appChromeMode === 'classic' ? 'classic' : 'zen',
+    nativePolishCss:
+      typeof candidate.settings?.nativePolishCss === 'boolean'
+        ? candidate.settings.nativePolishCss
+        : DEFAULT_SETTINGS.nativePolishCss,
+    smartLinkRouting:
+      typeof candidate.settings?.smartLinkRouting === 'boolean'
+        ? candidate.settings.smartLinkRouting
+        : DEFAULT_SETTINGS.smartLinkRouting,
+    minimizeToTrayOnClose:
+      typeof candidate.settings?.minimizeToTrayOnClose === 'boolean'
+        ? candidate.settings.minimizeToTrayOnClose
+        : DEFAULT_SETTINGS.minimizeToTrayOnClose,
+    launchAtLogin:
+      typeof candidate.settings?.launchAtLogin === 'boolean'
+        ? candidate.settings.launchAtLogin
+        : DEFAULT_SETTINGS.launchAtLogin,
+    restoreLastPages:
+      typeof candidate.settings?.restoreLastPages === 'boolean'
+        ? candidate.settings.restoreLastPages
+        : DEFAULT_SETTINGS.restoreLastPages,
+    globalSummonShortcut:
+      typeof candidate.settings?.globalSummonShortcut === 'string' &&
+      candidate.settings.globalSummonShortcut.trim()
+        ? candidate.settings.globalSummonShortcut.trim()
+        : DEFAULT_SETTINGS.globalSummonShortcut,
     shareGoogleSession:
       typeof candidate.settings?.shareGoogleSession === 'boolean'
         ? candidate.settings.shareGoogleSession
@@ -265,12 +310,17 @@ export function mergePersistedConfig(raw: unknown): PersistedConfig {
         zoomFactor: clampZoom(item.zoomFactor ?? base?.zoomFactor ?? 1.0),
         adBlockEnabled:
           typeof item.adBlockEnabled === 'boolean' ? item.adBlockEnabled : true,
+        volume: clampVolume(item.volume ?? 1.0),
+        lastUrl:
+          typeof item.lastUrl === 'string' && /^https?:\/\//i.test(item.lastUrl)
+            ? item.lastUrl
+            : undefined,
       });
     }
 
     for (const def of DEFAULT_SERVICES) {
       if (!seen.has(def.id)) {
-        hydrated.push({ ...def, adBlockEnabled: true });
+        hydrated.push({ ...def, adBlockEnabled: true, volume: 1.0 });
       }
     }
 
@@ -297,7 +347,6 @@ export function mergePersistedConfig(raw: unknown): PersistedConfig {
 
   const fallbackSecondary = visible.find((s) => s.id !== activeServiceId)?.id ?? null;
 
-  // Hydrate workspaces (always keep built-in workspaces + valid custom presets)
   const customWorkspaces: WorkspacePreset[] = [];
   if (Array.isArray(candidate.workspaces)) {
     const builtInWorkspaceIds = new Set(DEFAULT_WORKSPACES.map((w) => w.id));
@@ -340,6 +389,54 @@ export function mergePersistedConfig(raw: unknown): PersistedConfig {
       ? candidate.activeWorkspaceId
       : 'all';
 
+  const pinnedFavorites: PinnedFavorite[] = Array.isArray(candidate.pinnedFavorites)
+    ? candidate.pinnedFavorites
+        .filter(
+          (f): f is PinnedFavorite =>
+            Boolean(f) &&
+            typeof f === 'object' &&
+            typeof f.id === 'string' &&
+            typeof f.serviceId === 'string' &&
+            typeof f.title === 'string' &&
+            typeof f.url === 'string' &&
+            /^https?:\/\//i.test(f.url),
+        )
+        .slice(0, 32)
+    : [];
+
+  const recentActivity: RecentActivityItem[] = Array.isArray(candidate.recentActivity)
+    ? candidate.recentActivity
+        .filter(
+          (r): r is RecentActivityItem =>
+            Boolean(r) &&
+            typeof r === 'object' &&
+            typeof r.id === 'string' &&
+            typeof r.serviceId === 'string' &&
+            typeof r.title === 'string' &&
+            typeof r.url === 'string' &&
+            /^https?:\/\//i.test(r.url),
+        )
+        .slice(0, 18)
+    : [];
+
+  let windowBounds: WindowBounds | undefined;
+  if (
+    candidate.windowBounds &&
+    typeof candidate.windowBounds === 'object' &&
+    typeof candidate.windowBounds.width === 'number' &&
+    typeof candidate.windowBounds.height === 'number' &&
+    candidate.windowBounds.width >= 600 &&
+    candidate.windowBounds.height >= 400
+  ) {
+    windowBounds = {
+      x: typeof candidate.windowBounds.x === 'number' ? candidate.windowBounds.x : undefined,
+      y: typeof candidate.windowBounds.y === 'number' ? candidate.windowBounds.y : undefined,
+      width: Math.round(candidate.windowBounds.width),
+      height: Math.round(candidate.windowBounds.height),
+      maximized: Boolean(candidate.windowBounds.maximized),
+    };
+  }
+
   return {
     version: 1,
     services,
@@ -352,6 +449,9 @@ export function mergePersistedConfig(raw: unknown): PersistedConfig {
     settings,
     workspaces,
     activeWorkspaceId,
+    pinnedFavorites,
+    recentActivity,
+    windowBounds,
   };
 }
 
@@ -543,6 +643,122 @@ export function toggleServiceAdBlock(config: PersistedConfig, serviceId: string)
   return { ...config, services };
 }
 
+export function setServiceVolume(
+  config: PersistedConfig,
+  serviceId: string,
+  volume: number,
+): PersistedConfig {
+  const idx = config.services.findIndex((s) => s.id === serviceId);
+  if (idx === -1) return config;
+  const services = [...config.services];
+  services[idx] = {
+    ...services[idx],
+    volume: clampVolume(volume),
+  };
+  return { ...config, services };
+}
+
+export function setServiceLastUrl(
+  config: PersistedConfig,
+  serviceId: string,
+  url: string,
+): PersistedConfig {
+  if (!/^https?:\/\//i.test(url)) return config;
+  const idx = config.services.findIndex((s) => s.id === serviceId);
+  if (idx === -1) return config;
+  if (config.services[idx].lastUrl === url) return config;
+  const services = [...config.services];
+  services[idx] = {
+    ...services[idx],
+    lastUrl: url,
+  };
+  return { ...config, services };
+}
+
+export function pinFavorite(
+  config: PersistedConfig,
+  input: { serviceId: string; title: string; url: string },
+): PersistedConfig {
+  const normalizedUrl = normalizeServiceUrl(input.url);
+  const title = input.title.trim().replace(/^[\(\[]\d+\+?[\)\]]\s*/, '') || normalizedUrl;
+  const existingIdx = config.pinnedFavorites.findIndex((f) => f.url === normalizedUrl);
+  if (existingIdx !== -1) {
+    const next = [...config.pinnedFavorites];
+    next[existingIdx] = { ...next[existingIdx], title };
+    return { ...config, pinnedFavorites: next };
+  }
+
+  const created: PinnedFavorite = {
+    id: `fav-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    serviceId: input.serviceId,
+    title: title.slice(0, 80),
+    url: normalizedUrl,
+    createdAt: Date.now(),
+  };
+
+  return {
+    ...config,
+    pinnedFavorites: [created, ...config.pinnedFavorites].slice(0, 32),
+  };
+}
+
+export function removeFavorite(config: PersistedConfig, favoriteId: string): PersistedConfig {
+  return {
+    ...config,
+    pinnedFavorites: config.pinnedFavorites.filter((f) => f.id !== favoriteId),
+  };
+}
+
+export function recordRecentActivity(
+  config: PersistedConfig,
+  input: { serviceId: string; title: string; url: string },
+  nowMs = Date.now(),
+): PersistedConfig {
+  let parsed: URL;
+  try {
+    parsed = new URL(input.url);
+  } catch {
+    return config;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return config;
+
+  // Skip bare root pages and auth/login screens so Continue Watching/Listening stays meaningful
+  const pathLower = parsed.pathname.toLowerCase();
+  if (
+    (pathLower === '/' || pathLower === '') &&
+    !parsed.search
+  ) {
+    return config;
+  }
+  if (
+    pathLower.includes('/login') ||
+    pathLower.includes('/signin') ||
+    pathLower.includes('/oauth') ||
+    pathLower.includes('/auth') ||
+    parsed.hostname.toLowerCase().startsWith('accounts.')
+  ) {
+    return config;
+  }
+
+  const cleanTitle = input.title.trim().replace(/^[\(\[]\d+\+?[\)\]]\s*/, '');
+  if (!cleanTitle) return config;
+
+  const cleanUrl = parsed.toString().replace(/\/$/, '') || parsed.origin;
+  const filtered = config.recentActivity.filter((item) => item.url !== cleanUrl);
+  const entry: RecentActivityItem = {
+    id: `rec-${nowMs}-${Math.random().toString(36).slice(2, 6)}`,
+    serviceId: input.serviceId,
+    title: cleanTitle.slice(0, 96),
+    url: cleanUrl,
+    visitedAt: nowMs,
+  };
+
+  return {
+    ...config,
+    recentActivity: [entry, ...filtered].slice(0, 16),
+  };
+}
+
 export function serializeConfigForExport(config: PersistedConfig): string {
   return JSON.stringify(
     {
@@ -610,6 +826,7 @@ export function addCustomService(
     mobileUserAgentMode: input.mobileUserAgentMode ?? 'mobile',
     zoomFactor: 1.0,
     adBlockEnabled: input.adBlockEnabled ?? true,
+    volume: 1.0,
   };
 
   return {
@@ -637,6 +854,7 @@ export function updateService(
       | 'mobileUserAgentMode'
       | 'zoomFactor'
       | 'adBlockEnabled'
+      | 'volume'
     >
   >,
 ): PersistedConfig {
@@ -676,6 +894,7 @@ export function updateService(
       typeof patch.adBlockEnabled === 'boolean'
         ? patch.adBlockEnabled
         : (current.adBlockEnabled ?? true),
+    volume: patch.volume !== undefined ? clampVolume(patch.volume) : (current.volume ?? 1.0),
   };
 
   const services = [...config.services];
@@ -806,7 +1025,7 @@ export function shouldAutoHibernate(
 
 /**
  * Pure layout geometry calculator for Desktop `WebContentsView` bounds.
- * Ensures zero overlap with the Top Menu Bar / Left Sidebar Rail, split divider, or open modals.
+ * Ensures zero overlap with Top/Left bars, Bottom Media Dock, split divider, Home Hub, or modals.
  */
 export function computeDesktopLayoutBounds(
   contentWidth: number,

@@ -25,26 +25,42 @@ const api: OmniDeckBridge = {
     };
   },
 
+  openHome: () => ipcRenderer.invoke('omnideck:open-home'),
   selectService: (serviceId) => ipcRenderer.invoke('omnideck:select-service', serviceId),
+  openServiceUrl: (serviceId, url, inSplitView) =>
+    ipcRenderer.invoke('omnideck:open-service-url', serviceId, url, Boolean(inSplitView)),
+  searchInService: (serviceId, query) =>
+    ipcRenderer.invoke('omnideck:search-in-service', serviceId, query),
   goBack: (serviceId) => ipcRenderer.invoke('omnideck:go-back', serviceId),
   goForward: (serviceId) => ipcRenderer.invoke('omnideck:go-forward', serviceId),
   reload: (serviceId, hard) => ipcRenderer.invoke('omnideck:reload', serviceId, Boolean(hard)),
   goHome: (serviceId) => ipcRenderer.invoke('omnideck:go-home', serviceId),
   toggleMute: (serviceId) => ipcRenderer.invoke('omnideck:toggle-mute', serviceId),
   muteAll: () => ipcRenderer.invoke('omnideck:mute-all'),
+  setVolume: (serviceId, volume) => ipcRenderer.invoke('omnideck:set-volume', serviceId, volume),
   setZoom: (serviceId, zoomFactor) => ipcRenderer.invoke('omnideck:set-zoom', serviceId, zoomFactor),
   hibernateService: (serviceId) => ipcRenderer.invoke('omnideck:hibernate', serviceId),
+  hibernateInactive: () => ipcRenderer.invoke('omnideck:hibernate-inactive'),
   wakeService: (serviceId) => ipcRenderer.invoke('omnideck:wake', serviceId),
   openExternal: (serviceId) => ipcRenderer.invoke('omnideck:open-external', serviceId),
   openDevTools: (serviceId) => ipcRenderer.invoke('omnideck:open-devtools', serviceId),
   clearServiceSession: (serviceId) => ipcRenderer.invoke('omnideck:clear-session', serviceId),
 
+  pinCurrentPage: (serviceId) => ipcRenderer.invoke('omnideck:pin-current-page', serviceId),
+  removeFavorite: (favoriteId) => ipcRenderer.invoke('omnideck:remove-favorite', favoriteId),
+  clearRecentActivity: () => ipcRenderer.invoke('omnideck:clear-recent'),
+
   mediaPlayPause: (serviceId) => ipcRenderer.invoke('omnideck:media-play-pause', serviceId),
   mediaNext: (serviceId) => ipcRenderer.invoke('omnideck:media-next', serviceId),
   mediaPrevious: (serviceId) => ipcRenderer.invoke('omnideck:media-previous', serviceId),
   resumeAutoPaused: () => ipcRenderer.invoke('omnideck:resume-auto-paused'),
+  setSleepTimer: (minutes) => ipcRenderer.invoke('omnideck:set-sleep-timer', minutes),
   triggerPip: (serviceId) => ipcRenderer.invoke('omnideck:trigger-pip', serviceId),
   toggleAlwaysOnTop: () => ipcRenderer.invoke('omnideck:toggle-always-on-top'),
+
+  windowMinimize: () => ipcRenderer.invoke('omnideck:window-minimize'),
+  windowToggleMaximize: () => ipcRenderer.invoke('omnideck:window-toggle-maximize'),
+  windowClose: () => ipcRenderer.invoke('omnideck:window-close'),
 
   toggleServiceAdBlock: (serviceId) => ipcRenderer.invoke('omnideck:toggle-service-adblock', serviceId),
 

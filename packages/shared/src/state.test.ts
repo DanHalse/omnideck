@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   addCustomService,
   applyWorkspace,
+  buildServiceSearchUrl,
   computeDesktopLayoutBounds,
   createDefaultConfig,
   createInitialRuntimeState,
@@ -10,15 +11,20 @@ import {
   extractBadgeCountFromTitle,
   getVisibleServices,
   isInAppPopupUrl,
+  matchServiceForUrl,
   mergePersistedConfig,
   moveServiceById,
   normalizeServiceUrl,
   parseImportedConfig,
+  pinFavorite,
+  recordRecentActivity,
   removeCustomService,
+  removeFavorite,
   resolveElectronPartition,
   saveCustomWorkspace,
   selectActiveService,
   serializeConfigForExport,
+  setServiceVolume,
   setSplitRatio,
   shouldAutoHibernate,
   swapSplitPanes,
@@ -261,18 +267,99 @@ describe('Split-view, hibernation & desktop layout bounds', () => {
     expect(modalOpen.secondary).toBeNull();
   });
 
-  it('gracefully merges partial v1.0 persisted configs into v1.1 defaults', () => {
+  it('gracefully merges partial v1.0 persisted configs into v1.2 defaults', () => {
     const merged = mergePersistedConfig({
       settings: { navPosition: 'left', theme: 'light', autoHibernateMinutes: 15 },
       activeServiceId: 'spotify',
     });
     expect(merged.settings.navPosition).toBe('left');
     expect(merged.settings.theme).toBe('light');
+    expect(merged.settings.appChromeMode).toBe('zen');
+    expect(merged.settings.smartLinkRouting).toBe(true);
+    expect(merged.settings.nativePolishCss).toBe(true);
     expect(merged.settings.shareGoogleSession).toBe(true);
     expect(merged.settings.smartAudioSwitching).toBe(true);
     expect(merged.settings.adBlockerEnabled).toBe(true);
     expect(merged.workspaces).toHaveLength(3);
     expect(merged.activeServiceId).toBe('spotify');
     expect(merged.services).toHaveLength(6);
+  });
+});
+
+describe('v1.2 Native Cockpit — Search, Smart Link Routing, Favorites, History & Mixer', () => {
+  it('builds direct cross-service search URLs including r/subreddit shortcuts', () => {
+    expect(buildServiceSearchUrl('youtube', 'lofi beats')).toBe(
+      'https://www.youtube.com/results?search_query=lofi%20beats',
+    );
+    expect(buildServiceSearchUrl('spotify', 'daft punk')).toBe(
+      'https://open.spotify.com/search/daft%20punk',
+    );
+    expect(buildServiceSearchUrl('reddit', 'r/linux')).toBe('https://www.reddit.com/r/linux/');
+    expect(buildServiceSearchUrl('reddit', 'steam deck')).toBe(
+      'https://www.reddit.com/search/?q=steam%20deck',
+    );
+    expect(buildServiceSearchUrl('audible', 'dune')).toBe(
+      'https://www.audible.com/search?keywords=dune',
+    );
+  });
+
+  it('routes cross-service links cleanly without hijacking OAuth or same-service links', () => {
+    const config = createDefaultConfig();
+    expect(
+      matchServiceForUrl('https://youtu.be/dQw4w9WgXcQ', config.services, 'reddit')?.id,
+    ).toBe('youtube');
+    expect(
+      matchServiceForUrl('https://open.spotify.com/track/123', config.services, 'reddit')?.id,
+    ).toBe('spotify');
+    expect(
+      matchServiceForUrl('https://www.twitch.tv/shroud', config.services, 'youtube')?.id,
+    ).toBe('twitch');
+    expect(
+      matchServiceForUrl('https://music.youtube.com/watch?v=abc', config.services, 'reddit')?.id,
+    ).toBe('youtube-music');
+    // Same-service links stay inside their tab
+    expect(
+      matchServiceForUrl('https://www.youtube.com/watch?v=abc', config.services, 'youtube'),
+    ).toBeNull();
+    // OAuth flows are NEVER hijacked
+    expect(
+      matchServiceForUrl('https://accounts.google.com/o/oauth2/auth', config.services, 'reddit'),
+    ).toBeNull();
+  });
+
+  it('pins/removes favorites, records meaningful recent items, and clamps mixer volume', () => {
+    let config = createDefaultConfig();
+    config = pinFavorite(config, {
+      serviceId: 'reddit',
+      title: '(4) r/linux',
+      url: 'https://www.reddit.com/r/linux/',
+    });
+    expect(config.pinnedFavorites).toHaveLength(1);
+    expect(config.pinnedFavorites[0].title).toBe('r/linux');
+
+    const favId = config.pinnedFavorites[0].id;
+    config = removeFavorite(config, favId);
+    expect(config.pinnedFavorites).toHaveLength(0);
+
+    // Skips bare homepage and login pages
+    config = recordRecentActivity(config, {
+      serviceId: 'youtube',
+      title: 'YouTube',
+      url: 'https://www.youtube.com/',
+    });
+    expect(config.recentActivity).toHaveLength(0);
+
+    config = recordRecentActivity(config, {
+      serviceId: 'youtube',
+      title: '(2) Awesome Video - YouTube',
+      url: 'https://www.youtube.com/watch?v=abc123',
+    });
+    expect(config.recentActivity).toHaveLength(1);
+    expect(config.recentActivity[0].title).toBe('Awesome Video - YouTube');
+
+    config = setServiceVolume(config, 'spotify', 0.35);
+    expect(config.services.find((s) => s.id === 'spotify')?.volume).toBe(0.35);
+    config = setServiceVolume(config, 'spotify', 1.8);
+    expect(config.services.find((s) => s.id === 'spotify')?.volume).toBe(1.0);
   });
 });
