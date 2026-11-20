@@ -1,0 +1,94 @@
+import type {
+  AppSettings,
+  ChromeInsets,
+  CustomServiceInput,
+  DesktopSnapshot,
+  ServiceDefinition,
+  UpdateState,
+} from '@omnideck/shared';
+
+export interface OmniDeckBridge {
+  getSnapshot: () => Promise<DesktopSnapshot>;
+  subscribe: (listener: (snapshot: DesktopSnapshot) => void) => () => void;
+  onUiCommand: (listener: (command: UiCommandEvent) => void) => () => void;
+
+  selectService: (serviceId: string) => Promise<DesktopSnapshot>;
+  goBack: (serviceId: string) => Promise<void>;
+  goForward: (serviceId: string) => Promise<void>;
+  reload: (serviceId: string, hard?: boolean) => Promise<void>;
+  goHome: (serviceId: string) => Promise<void>;
+  toggleMute: (serviceId: string) => Promise<DesktopSnapshot>;
+  muteAll: () => Promise<DesktopSnapshot>;
+  setZoom: (serviceId: string, zoomFactor: number) => Promise<DesktopSnapshot>;
+  hibernateService: (serviceId: string) => Promise<DesktopSnapshot>;
+  wakeService: (serviceId: string) => Promise<DesktopSnapshot>;
+  openExternal: (serviceId: string) => Promise<void>;
+  openDevTools: (serviceId: string) => Promise<void>;
+  clearServiceSession: (serviceId: string) => Promise<DesktopSnapshot>;
+
+  // Unified Media Controls, Smart Audio Switching & PiP
+  mediaPlayPause: (serviceId?: string) => Promise<DesktopSnapshot>;
+  mediaNext: (serviceId?: string) => Promise<void>;
+  mediaPrevious: (serviceId?: string) => Promise<void>;
+  resumeAutoPaused: () => Promise<DesktopSnapshot>;
+  triggerPip: (serviceId: string) => Promise<void>;
+  toggleAlwaysOnTop: () => Promise<DesktopSnapshot>;
+
+  // Ad & Tracker Shield
+  toggleServiceAdBlock: (serviceId: string) => Promise<DesktopSnapshot>;
+
+  // Split View
+  toggleSplitView: (enabled?: boolean, secondaryServiceId?: string | null) => Promise<DesktopSnapshot>;
+  setSplitSecondary: (serviceId: string) => Promise<DesktopSnapshot>;
+  swapSplitPanes: () => Promise<DesktopSnapshot>;
+  setSplitRatio: (ratio: number) => Promise<DesktopSnapshot>;
+
+  // Workspaces
+  applyWorkspace: (workspaceId: string) => Promise<DesktopSnapshot>;
+  saveCustomWorkspace: (name: string) => Promise<DesktopSnapshot>;
+  deleteCustomWorkspace: (workspaceId: string) => Promise<DesktopSnapshot>;
+
+  // Settings, Services & Cross-Device Sync
+  updateSettings: (patch: Partial<AppSettings>) => Promise<DesktopSnapshot>;
+  addCustomService: (input: CustomServiceInput) => Promise<DesktopSnapshot>;
+  updateService: (
+    serviceId: string,
+    patch: Partial<
+      Pick<
+        ServiceDefinition,
+        | 'name'
+        | 'shortName'
+        | 'url'
+        | 'mobileUrl'
+        | 'accentColor'
+        | 'icon'
+        | 'keepAliveInBackground'
+        | 'mobileUserAgentMode'
+        | 'zoomFactor'
+        | 'adBlockEnabled'
+      >
+    >,
+  ) => Promise<DesktopSnapshot>;
+  removeCustomService: (serviceId: string) => Promise<DesktopSnapshot>;
+  toggleServiceVisibility: (serviceId: string) => Promise<DesktopSnapshot>;
+  reorderServices: (fromIndex: number, toIndex: number) => Promise<DesktopSnapshot>;
+  moveServiceById: (draggedId: string, targetId: string) => Promise<DesktopSnapshot>;
+  resetDefaults: () => Promise<DesktopSnapshot>;
+  exportConfigFile: () => Promise<{ saved: boolean; path?: string }>;
+  importConfigFile: () => Promise<{ imported: boolean; snapshot?: DesktopSnapshot; error?: string }>;
+  getExportJson: () => Promise<string>;
+  importConfigJson: (rawJson: string) => Promise<DesktopSnapshot>;
+
+  // Auto-Updater
+  checkForUpdates: () => Promise<UpdateState>;
+  installUpdate: () => Promise<void>;
+  openReleasePage: () => Promise<void>;
+
+  setOverlayOpen: (open: boolean) => Promise<void>;
+  setChromeInsets: (insets: ChromeInsets) => Promise<void>;
+}
+
+export type UiCommandEvent =
+  | { type: 'open-settings' }
+  | { type: 'open-service-manager' }
+  | { type: 'close-overlays' };

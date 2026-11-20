@@ -1,0 +1,24 @@
+{
+  "name": "omnideck-monorepo",
+  "version": "1.1.0",
+  "private": true,
+  "description": "OmniDeck — Cross-platform Desktop (Windows & Linux, Widevine DRM) and Android media hub for YouTube, Twitch, Spotify, YouTube Music, Reddit, and Audible.",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:desktop": "npm run dev --workspace=@omnideck/desktop",
+    "dev:desktop:web": "npm run dev:renderer --workspace=@omnideck/desktop",
+    "dev:mobile": "npm run start --workspace=@omnideck/mobile",
+    "build:shared": "npm run build --workspace=@omnideck/shared",
+    "build:desktop": "npm run build:shared && npm run build --workspace=@omnideck/desktop",
+    "package:linux": "npm run build:desktop && npm run package:linux --workspace=@omnideck/desktop",
+    "package:win": "npm run build:desktop && npm run package:win --workspace=@omnideck/desktop",
+    "typecheck": "npm run build:shared && npm run typecheck --workspace=@omnideck/desktop && npm run typecheck --workspace=@omnideck/mobile",
+    "test": "npm run test --workspace=@omnideck/shared && npm run test --workspace=@omnideck/desktop"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

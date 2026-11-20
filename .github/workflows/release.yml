@@ -1,0 +1,61 @@
+name: Build & Publish OmniDeck Releases
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release-desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            cmd: npx --workspace=@omnideck/desktop electron-builder --linux AppImage deb --config electron-builder.yml --publish always
+          - os: windows-latest
+            platform: windows
+            cmd: npx --workspace=@omnideck/desktop electron-builder --win nsis portable zip --config electron-builder.yml --publish always
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck & Unit Tests
+        run: npm run typecheck && npm test
+
+      - name: Build Shared & Desktop Bundles
+        run: npm run build:desktop
+
+      - name: Package & Publish to GitHub Releases (${{ matrix.platform }})
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ${{ matrix.cmd }}
+
+      - name: Upload Workflow Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: omnideck-${{ matrix.platform }}
+          path: |
+            apps/desktop/release/*.AppImage
+            apps/desktop/release/*.deb
+            apps/desktop/release/*.exe
+            apps/desktop/release/*.zip
+            apps/desktop/release/*.yml
+            apps/desktop/release/*.blockmap

@@ -1,0 +1,64 @@
+appId: dev.omnideck.desktop
+productName: OmniDeck
+executableName: omnideck
+copyright: Copyright © 2026 OmniDeck Contributors
+publish:
+  provider: github
+  owner: DanHalse
+  repo: omnideck
+  releaseType: release
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - package.json
+  - "!node_modules/**/*"
+extraResources:
+  - from: build/icon.png
+    to: icon.png
+asar: true
+npmRebuild: false
+electronVersion: 45.2.1+wvcus
+electronDownload:
+  mirror: https://github.com/castlabs/electron-releases/releases/download/
+afterSign: build/afterSign.cjs
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+nsis:
+  artifactName: OmniDeck-Setup-${version}.${ext}
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+portable:
+  artifactName: OmniDeck-Portable-${version}.${ext}
+linux:
+  icon: build/icon.png
+  category: AudioVideo;Network
+  syncDesktopName: true
+  artifactName: OmniDeck-${version}-${arch}.${ext}
+  desktop:
+    entry:
+      Name: OmniDeck
+      Comment: Multi-service desktop media hub for YouTube, Twitch, Spotify, YouTube Music, Reddit, and Audible
+      StartupWMClass: omnideck
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+deb:
+  packageName: omnideck
+rpm:
+  packageName: omnideck

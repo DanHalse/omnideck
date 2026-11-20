@@ -1,0 +1,278 @@
+import { describe, expect, it } from 'vitest';
+import {
+  addCustomService,
+  applyWorkspace,
+  computeDesktopLayoutBounds,
+  createDefaultConfig,
+  createInitialRuntimeState,
+  DEFAULT_SERVICES,
+  deleteCustomWorkspace,
+  extractBadgeCountFromTitle,
+  getVisibleServices,
+  isInAppPopupUrl,
+  mergePersistedConfig,
+  moveServiceById,
+  normalizeServiceUrl,
+  parseImportedConfig,
+  removeCustomService,
+  resolveElectronPartition,
+  saveCustomWorkspace,
+  selectActiveService,
+  serializeConfigForExport,
+  setSplitRatio,
+  shouldAutoHibernate,
+  swapSplitPanes,
+  toggleServiceAdBlock,
+  toggleServiceVisibility,
+  toggleSplitView,
+  updateService,
+} from './index.js';
+
+describe('@omnideck/shared defaults & partitions', () => {
+  it('ships all 6 requested platforms with YouTube & YT Music sharing Google session', () => {
+    const ids = DEFAULT_SERVICES.map((s) => s.id);
+    expect(ids).toEqual(['youtube', 'twitch', 'spotify', 'youtube-music', 'reddit', 'audible']);
+
+    const yt = DEFAULT_SERVICES.find((s) => s.id === 'youtube')!;
+    const ytm = DEFAULT_SERVICES.find((s) => s.id === 'youtube-music')!;
+    const spotify = DEFAULT_SERVICES.find((s) => s.id === 'spotify')!;
+    const audible = DEFAULT_SERVICES.find((s) => s.id === 'audible')!;
+
+    expect(resolveElectronPartition(yt, true)).toBe('persist:google');
+    expect(resolveElectronPartition(ytm, true)).toBe('persist:google');
+    expect(resolveElectronPartition(yt, false)).toBe('persist:youtube');
+    expect(resolveElectronPartition(ytm, false)).toBe('persist:youtube-music');
+    expect(resolveElectronPartition(spotify, true)).toBe('persist:spotify');
+    expect(resolveElectronPartition(audible, true)).toBe('persist:audible');
+    expect(spotify.requiresDrm).toBe(true);
+    expect(audible.requiresDrm).toBe(true);
+  });
+
+  it('keeps OAuth popups and Audible Cloud Player in-app while sending external links out', () => {
+    const reddit = DEFAULT_SERVICES.find((s) => s.id === 'reddit')!;
+    const audible = DEFAULT_SERVICES.find((s) => s.id === 'audible')!;
+
+    expect(isInAppPopupUrl('https://accounts.google.com/o/oauth2/auth', reddit)).toBe(true);
+    expect(isInAppPopupUrl('https://www.audible.com/webplayer?asin=B001', audible)).toBe(true);
+    expect(isInAppPopupUrl('https://www.amazon.com/ap/signin', audible)).toBe(true);
+    expect(isInAppPopupUrl('https://news.ycombinator.com/item?id=1', reddit)).toBe(false);
+    expect(isInAppPopupUrl('javascript:alert(1)', reddit)).toBe(false);
+  });
+});
+
+describe('URL normalization & custom services', () => {
+  it('normalizes valid web URLs and rejects unsafe schemes', () => {
+    expect(normalizeServiceUrl('soundcloud.com')).toBe('https://soundcloud.com');
+    expect(normalizeServiceUrl('https://bandcamp.com/')).toBe('https://bandcamp.com');
+    expect(() => normalizeServiceUrl('javascript:alert(1)')).toThrow();
+    expect(() => normalizeServiceUrl('file:///etc/passwd')).toThrow();
+    expect(() => normalizeServiceUrl('')).toThrow();
+  });
+
+  it('adds, updates, reorders, hides, and removes custom services safely', () => {
+    let config = createDefaultConfig();
+    const added = addCustomService(config, {
+      name: 'SoundCloud',
+      url: 'soundcloud.com/discover',
+      icon: 'music',
+      accentColor: '#FF5500',
+    });
+    config = added.config;
+    expect(added.created.builtIn).toBe(false);
+    expect(added.created.url).toBe('https://soundcloud.com/discover');
+    expect(config.services).toHaveLength(7);
+
+    config = moveServiceById(config, added.created.id, 'youtube');
+    expect(config.services[0].id).toBe(added.created.id);
+
+    config = updateService(config, added.created.id, { name: 'SC Audio', zoomFactor: 1.25 });
+    expect(config.services[0].name).toBe('SC Audio');
+    expect(config.services[0].zoomFactor).toBe(1.25);
+
+    expect(removeCustomService(config, 'youtube').services).toHaveLength(7);
+    config = selectActiveService(config, added.created.id);
+    config = removeCustomService(config, added.created.id);
+    expect(config.services).toHaveLength(6);
+    expect(config.activeServiceId).toBe('youtube');
+  });
+
+  it('never hides the final visible service and switches active service when hiding current', () => {
+    let config = createDefaultConfig();
+    config = toggleServiceVisibility(config, 'youtube');
+    expect(config.services.find((s) => s.id === 'youtube')?.hidden).toBe(true);
+    expect(config.activeServiceId).toBe('twitch');
+
+    for (const id of ['twitch', 'spotify', 'youtube-music', 'reddit']) {
+      config = toggleServiceVisibility(config, id);
+    }
+    expect(config.activeServiceId).toBe('audible');
+
+    config = toggleServiceVisibility(config, 'audible');
+    expect(config.services.find((s) => s.id === 'audible')?.hidden).toBe(false);
+  });
+});
+
+describe('Workspaces, badges, ad-blocker toggles & cross-device sync', () => {
+  it('switches built-in workspaces and saves/deletes custom presets', () => {
+    let config = createDefaultConfig();
+    config = applyWorkspace(config, 'focus-audio');
+    expect(config.activeWorkspaceId).toBe('focus-audio');
+    expect(getVisibleServices(config).map((s) => s.id)).toEqual([
+      'spotify',
+      'youtube-music',
+      'audible',
+    ]);
+    expect(config.activeServiceId).toBe('spotify');
+
+    config = applyWorkspace(config, 'watch-chat');
+    expect(config.splitView.enabled).toBe(true);
+    expect(config.activeServiceId).toBe('twitch');
+    expect(config.splitView.secondaryServiceId).toBe('reddit');
+
+    config = saveCustomWorkspace(config, 'Late Night');
+    const customWs = config.workspaces.find((w) => w.name === 'Late Night')!;
+    expect(customWs).toBeDefined();
+    expect(customWs.builtIn).toBe(false);
+
+    config = deleteCustomWorkspace(config, customWs.id);
+    expect(config.workspaces.some((w) => w.id === customWs.id)).toBe(false);
+    expect(config.activeWorkspaceId).toBe('all');
+
+    config = applyWorkspace(config, 'all');
+    expect(getVisibleServices(config)).toHaveLength(6);
+  });
+
+  it('extracts notification badge counts from page titles cleanly', () => {
+    expect(extractBadgeCountFromTitle('(3) YouTube')).toBe(3);
+    expect(extractBadgeCountFromTitle('[12+] Reddit — Messages')).toBe(12);
+    expect(extractBadgeCountFromTitle('(250) Inbox')).toBe(99);
+    expect(extractBadgeCountFromTitle('YouTube — Music (2026)')).toBe(0);
+    expect(extractBadgeCountFromTitle('')).toBe(0);
+  });
+
+  it('toggles per-service ad-blocker and round-trips cross-device config JSON', () => {
+    let config = createDefaultConfig();
+    config = toggleServiceAdBlock(config, 'twitch');
+    expect(config.services.find((s) => s.id === 'twitch')?.adBlockEnabled).toBe(false);
+
+    config = addCustomService(config, { name: 'Pocket Casts', url: 'play.pocketcasts.com' }).config;
+    const exported = serializeConfigForExport(config);
+    const imported = parseImportedConfig(exported);
+
+    expect(imported.services).toHaveLength(7);
+    expect(imported.services.find((s) => s.id === 'twitch')?.adBlockEnabled).toBe(false);
+    expect(imported.services.some((s) => s.name === 'Pocket Casts')).toBe(true);
+    expect(() => parseImportedConfig('{bad json')).toThrow();
+  });
+});
+
+describe('Split-view, hibernation & desktop layout bounds', () => {
+  it('toggles split-view, swaps cleanly when clicking secondary tab, and clamps ratio', () => {
+    let config = createDefaultConfig();
+    config = toggleSplitView(config, true, 'reddit');
+    expect(config.splitView.enabled).toBe(true);
+    expect(config.activeServiceId).toBe('youtube');
+    expect(config.splitView.secondaryServiceId).toBe('reddit');
+
+    config = selectActiveService(config, 'reddit');
+    expect(config.activeServiceId).toBe('reddit');
+    expect(config.splitView.secondaryServiceId).toBe('youtube');
+
+    config = swapSplitPanes(config);
+    expect(config.activeServiceId).toBe('youtube');
+    expect(config.splitView.secondaryServiceId).toBe('reddit');
+
+    config = setSplitRatio(config, 0.95);
+    expect(config.splitView.ratio).toBe(0.75);
+    config = setSplitRatio(config, 0.05);
+    expect(config.splitView.ratio).toBe(0.25);
+  });
+
+  it('auto-hibernates idle silent tabs but NEVER hibernates audio-playing or visible tabs', () => {
+    const config = createDefaultConfig();
+    const now = 1_000_000_000;
+    const fortyMinAgo = now - 40 * 60_000;
+
+    const spotifySilent = {
+      ...createInitialRuntimeState(DEFAULT_SERVICES[2]),
+      mounted: true,
+      audible: false,
+      lastActiveAt: fortyMinAgo,
+    };
+    expect(shouldAutoHibernate(spotifySilent, config, now)).toBe(true);
+
+    const spotifyPlaying = { ...spotifySilent, audible: true };
+    expect(shouldAutoHibernate(spotifyPlaying, config, now)).toBe(false);
+
+    const activeYouTube = {
+      ...createInitialRuntimeState(DEFAULT_SERVICES[0]),
+      mounted: true,
+      audible: false,
+      lastActiveAt: fortyMinAgo,
+    };
+    expect(shouldAutoHibernate(activeYouTube, config, now)).toBe(false);
+  });
+
+  it('computes non-overlapping WebContentsView bounds for top bar, left rail, split view, and modals', () => {
+    const topSingle = computeDesktopLayoutBounds(
+      1400,
+      900,
+      { top: 88, left: 0, splitDividerWidth: 6, splitHeaderHeight: 34 },
+      {
+        overlayOpen: false,
+        primaryHibernated: false,
+        splitEnabled: false,
+        secondaryHibernated: false,
+        splitRatio: 0.5,
+      },
+    );
+    expect(topSingle.primary).toEqual({ x: 0, y: 88, width: 1400, height: 812 });
+    expect(topSingle.secondary).toBeNull();
+
+    const leftSplit = computeDesktopLayoutBounds(
+      1400,
+      900,
+      { top: 44, left: 72, splitDividerWidth: 6, splitHeaderHeight: 34 },
+      {
+        overlayOpen: false,
+        primaryHibernated: false,
+        splitEnabled: true,
+        secondaryHibernated: false,
+        splitRatio: 0.5,
+      },
+    );
+    expect(leftSplit.primary).toEqual({ x: 72, y: 78, width: 661, height: 822 });
+    expect(leftSplit.dividerX).toBe(733);
+    expect(leftSplit.secondary).toEqual({ x: 739, y: 78, width: 661, height: 822 });
+
+    const modalOpen = computeDesktopLayoutBounds(
+      1400,
+      900,
+      { top: 88, left: 0, splitDividerWidth: 6, splitHeaderHeight: 34 },
+      {
+        overlayOpen: true,
+        primaryHibernated: false,
+        splitEnabled: true,
+        secondaryHibernated: false,
+        splitRatio: 0.5,
+      },
+    );
+    expect(modalOpen.primary).toBeNull();
+    expect(modalOpen.secondary).toBeNull();
+  });
+
+  it('gracefully merges partial v1.0 persisted configs into v1.1 defaults', () => {
+    const merged = mergePersistedConfig({
+      settings: { navPosition: 'left', theme: 'light', autoHibernateMinutes: 15 },
+      activeServiceId: 'spotify',
+    });
+    expect(merged.settings.navPosition).toBe('left');
+    expect(merged.settings.theme).toBe('light');
+    expect(merged.settings.shareGoogleSession).toBe(true);
+    expect(merged.settings.smartAudioSwitching).toBe(true);
+    expect(merged.settings.adBlockerEnabled).toBe(true);
+    expect(merged.workspaces).toHaveLength(3);
+    expect(merged.activeServiceId).toBe('spotify');
+    expect(merged.services).toHaveLength(6);
+  });
+});
