@@ -144,7 +144,9 @@ export class UpdateManager {
 
   quitAndInstall(): void {
     if (this.initializedNative && this.state.phase === 'downloaded') {
-      autoUpdater.quitAndInstall(false, true);
+      // isSilent=true skips the interactive Windows NSIS wizard and patches in-place;
+      // isForceRunAfter=true immediately relaunches OmniDeck once patching completes.
+      autoUpdater.quitAndInstall(true, true);
       return;
     }
     this.openReleasePage();

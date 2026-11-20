@@ -958,7 +958,10 @@ function registerIpcHandlers(): void {
 
   // Auto-Updater
   ipcMain.handle('omnideck:check-updates', () => updateManager?.checkForUpdates(false));
-  ipcMain.handle('omnideck:install-update', () => updateManager?.quitAndInstall());
+  ipcMain.handle('omnideck:install-update', () => {
+    forceQuitting = true;
+    updateManager?.quitAndInstall();
+  });
   ipcMain.handle('omnideck:open-release-page', () => updateManager?.openReleasePage());
 
   ipcMain.handle('omnideck:set-overlay-open', (_e, open: boolean) => {

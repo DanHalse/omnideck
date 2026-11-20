@@ -35,10 +35,12 @@ win:
         - x64
 nsis:
   artifactName: OmniDeck-Setup-${version}.${ext}
-  oneClick: false
-  allowToChangeInstallationDirectory: true
+  oneClick: true
+  perMachine: false
+  differentialPackage: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
+  runAfterFinish: true
 portable:
   artifactName: OmniDeck-Portable-${version}.${ext}
 linux:
