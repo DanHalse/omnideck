@@ -31,9 +31,11 @@ interface ServiceManagerSheetProps {
   services: ServiceDefinition[];
   workspaces: WorkspacePreset[];
   activeWorkspaceId: string;
+  sleepTimerMinutes: number;
   onClose: () => void;
   onToggleTheme: () => void;
   onSleepInactive: () => void;
+  onSetSleepTimer: (minutes: number) => void;
   onApplyWorkspace: (workspaceId: string) => void;
   onReorder: (fromIndex: number, toIndex: number) => void;
   onToggleVisibility: (id: string) => void;
@@ -50,9 +52,11 @@ export function ServiceManagerSheet({
   services,
   workspaces,
   activeWorkspaceId,
+  sleepTimerMinutes,
   onClose,
   onToggleTheme,
   onSleepInactive,
+  onSetSleepTimer,
   onApplyWorkspace,
   onReorder,
   onToggleVisibility,
@@ -182,6 +186,40 @@ export function ServiceManagerSheet({
               </Text>
               <Text style={[styles.actionSub, { color: palette.inkSecondary }]}>{updateStatus}</Text>
             </Pressable>
+
+            <Text style={[styles.sectionTitle, { color: palette.inkMuted }]}>
+              SLEEP TIMER {sleepTimerMinutes > 0 ? `(ACTIVE · ${sleepTimerMinutes}m)` : ''}
+            </Text>
+            <View style={styles.wsWrap}>
+              {[15, 30, 45, 60].map((m) => {
+                const active = sleepTimerMinutes === m;
+                return (
+                  <Pressable
+                    key={m}
+                    onPress={() => onSetSleepTimer(m)}
+                    style={[
+                      styles.wsChip,
+                      {
+                        backgroundColor: active ? palette.accent : palette.surface,
+                        borderColor: palette.border,
+                      },
+                    ]}
+                  >
+                    <Text style={{ color: active ? '#FFFFFF' : palette.inkPrimary, fontSize: 12, fontWeight: '600' }}>
+                      {m} min
+                    </Text>
+                  </Pressable>
+                );
+              })}
+              {sleepTimerMinutes > 0 && (
+                <Pressable
+                  onPress={() => onSetSleepTimer(0)}
+                  style={[styles.wsChip, { backgroundColor: palette.surface, borderColor: palette.border }]}
+                >
+                  <Text style={{ color: palette.danger, fontSize: 12, fontWeight: '600' }}>Off</Text>
+                </Pressable>
+              )}
+            </View>
 
             <Text style={[styles.sectionTitle, { color: palette.inkMuted }]}>WORKSPACES</Text>
             <View style={styles.wsWrap}>

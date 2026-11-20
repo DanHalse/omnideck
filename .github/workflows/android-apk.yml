@@ -1,0 +1,89 @@
+name: Build & Publish OmniDeck Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'GitHub Release tag to attach the APK to (e.g. v1.4.0)'
+        required: false
+        default: ''
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-android-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build @omnideck/shared & Typecheck Mobile
+        run: npm run build:shared && npm run typecheck --workspace=@omnideck/mobile
+
+      - name: Generate Android native project (Expo Prebuild)
+        working-directory: apps/mobile
+        run: npx expo prebuild --platform android --clean --no-install
+
+      - name: Build Standalone Signed Release APK
+        working-directory: apps/mobile/android
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Stage Named APK
+        id: stage
+        run: |
+          VERSION=$(node -p "require('./apps/mobile/package.json').version")
+          TAG="${{ github.event.inputs.release_tag }}"
+          if [ -z "$TAG" ]; then
+            if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+              TAG="${{ github.ref_name }}"
+            else
+              TAG="v${VERSION}"
+            fi
+          fi
+          APK_NAME="OmniDeck-Android-${VERSION}.apk"
+          mkdir -p apps/mobile/release
+          cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk "apps/mobile/release/${APK_NAME}"
+          ls -lh "apps/mobile/release/${APK_NAME}"
+          echo "apk_name=${APK_NAME}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: omnideck-android-apk
+          path: apps/mobile/release/*.apk
+
+      - name: Attach APK to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.stage.outputs.release_tag }}"
+          APK="apps/mobile/release/${{ steps.stage.outputs.apk_name }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" --clobber
+          else
+            gh release create "$TAG" "$APK" --title "OmniDeck ${TAG}" --notes "Includes standalone Android APK (${{ steps.stage.outputs.apk_name }})."
+          fi
