@@ -13,6 +13,10 @@ describe('Ad & Tracker Shield request filter', () => {
 
   it('never blocks OAuth logins, Widevine DRM licenses, media streams, or mainFrame navigations', () => {
     expect(shouldBlockNetworkRequest('https://accounts.google.com/o/oauth2/v2/auth', 'xhr')).toBe(false);
+    expect(shouldBlockNetworkRequest('https://accounts.youtube.com/accounts/SetSID?ssdc=1', 'xhr')).toBe(false);
+    expect(shouldBlockNetworkRequest('https://myaccount.google.com/intro', 'xhr')).toBe(false);
+    expect(shouldBlockNetworkRequest('https://apis.google.com/js/api.js', 'script')).toBe(false);
+    expect(shouldBlockNetworkRequest('https://www.gstatic.com/accounts/static/botguard.js', 'script')).toBe(false);
     expect(shouldBlockNetworkRequest('https://gew1-spclient.spotify.com/widevine-license/v1/audio/license', 'xhr')).toBe(false);
     expect(shouldBlockNetworkRequest('https://www.youtube.com/watch?v=dQw4w9WgXcQ', 'mainFrame')).toBe(false);
     expect(shouldBlockNetworkRequest('https://doubleclick.net/test', 'mainFrame')).toBe(false);

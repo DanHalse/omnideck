@@ -65,6 +65,10 @@ const BLOCKED_URL_PATTERNS: RegExp[] = [
 
 const ALLOWLIST_PATTERNS: RegExp[] = [
   /accounts\.google\.com/i,
+  /accounts\.youtube\.com/i,
+  /myaccount\.google\.com/i,
+  /apis\.google\.com/i,
+  /gstatic\.com/i,
   /widevine/i,
   /license/i,
   /eme/i,

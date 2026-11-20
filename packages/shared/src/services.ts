@@ -283,13 +283,17 @@ export function matchServiceForUrl(
   const host = parsed.hostname.toLowerCase();
   const pathLower = parsed.pathname.toLowerCase();
 
-  // Never hijack OAuth/login/account flows across services
+  // Never hijack OAuth/login/account handoff flows across services
   if (
     GLOBAL_AUTH_HOSTS.has(host) ||
     pathLower.includes('/login') ||
     pathLower.includes('/signin') ||
     pathLower.includes('/oauth') ||
-    pathLower.includes('/auth')
+    pathLower.includes('/auth') ||
+    pathLower.includes('setsid') ||
+    pathLower.includes('checkconnection') ||
+    pathLower.includes('servicelogin') ||
+    pathLower.includes('/accounts/')
   ) {
     return null;
   }

@@ -57,28 +57,15 @@ interface MediaMeta {
   artworkUrl?: string;
 }
 
-export function buildCleanDesktopUserAgent(rawUa: string): string {
-  const cleaned = rawUa
-    .replace(/\sElectron\/[^\s]+/gi, '')
-    .replace(/\sOmniDeck\/[^\s]+/gi, '')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
-
-  if (cleaned.includes('Chrome/')) {
-    return cleaned;
-  }
-
-  const chromeVersion = process.versions.chrome || '136.0.0.0';
-  if (process.platform === 'win32') {
-    return `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`;
-  }
-  return `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`;
+export function shouldPreserveNativeUserAgent(): boolean {
+  // Keep Electron's honest, unmodified User-Agent so HTTP User-Agent matches Chromium's
+  // Sec-CH-UA Client Hints (laundering/stripping UA tokens triggers Google /v3/signin/rejected).
+  return true;
 }
 
 export class ViewManager {
   private readonly mainWindow: BrowserWindow;
   private readonly drmStatus: DrmStatus;
-  private readonly cleanUserAgent: string;
   private readonly views = new Map<string, WebContentsView>();
   private readonly viewPartitions = new Map<string, string>();
   private readonly webContentsToService = new Map<number, string>();
@@ -123,7 +110,6 @@ export class ViewManager {
     this.updateState = initialUpdateState;
     this.onSnapshotChanged = onSnapshotChanged;
     this.onConfigUpdated = onConfigUpdated;
-    this.cleanUserAgent = buildCleanDesktopUserAgent(mainWindow.webContents.getUserAgent());
     this.chromeInsets = this.defaultInsetsFor(initialConfig);
 
     for (const svc of initialConfig.services) {
@@ -763,8 +749,6 @@ export class ViewManager {
     }
     this.configuredPartitions.add(partition);
 
-    ses.setUserAgent(this.cleanUserAgent);
-
     ses.setPermissionRequestHandler((_webContents, permission, callback) => {
       if (permission === 'notifications' && this.config.settings.doNotDisturb) {
         callback(false);
@@ -856,7 +840,6 @@ export class ViewManager {
     this.runtime.set(service.id, rt);
 
     const wc = view.webContents;
-    wc.setUserAgent(this.cleanUserAgent);
     wc.setAudioMuted(rt.muted);
     wc.setZoomFactor(clampZoom(service.zoomFactor ?? rt.zoomFactor));
 
@@ -1028,10 +1011,6 @@ export class ViewManager {
         void shell.openExternal(url);
       }
       return { action: 'deny' };
-    });
-
-    wc.on('did-create-window', (childWindow) => {
-      childWindow.webContents.setUserAgent(this.cleanUserAgent);
     });
 
     wc.on('context-menu', (_event, params) => {

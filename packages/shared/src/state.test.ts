@@ -321,9 +321,18 @@ describe('v1.2 Native Cockpit — Search, Smart Link Routing, Favorites, History
     expect(
       matchServiceForUrl('https://www.youtube.com/watch?v=abc', config.services, 'youtube'),
     ).toBeNull();
-    // OAuth flows are NEVER hijacked
+    // OAuth & Google/YouTube cross-domain auth handoffs are NEVER hijacked
     expect(
       matchServiceForUrl('https://accounts.google.com/o/oauth2/auth', config.services, 'reddit'),
+    ).toBeNull();
+    expect(
+      matchServiceForUrl('https://www.youtube.com/CheckConnection?pmpo=https%3A%2F%2Faccounts.google.com', config.services, 'youtube-music'),
+    ).toBeNull();
+    expect(
+      matchServiceForUrl('https://accounts.youtube.com/accounts/SetSID?ssdc=1', config.services, 'youtube-music'),
+    ).toBeNull();
+    expect(
+      matchServiceForUrl('https://www.youtube.com/ServiceLogin?service=youtube', config.services, 'youtube-music'),
     ).toBeNull();
   });
 
