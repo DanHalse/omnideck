@@ -55,7 +55,20 @@ function buildMuteScript(muted: boolean): string {
     (function() {
       window.__omnideckMuted = ${muted ? 'true' : 'false'};
       const applyEl = (el) => {
-        try { if (el) el.muted = window.__omnideckMuted; } catch {}
+        try {
+          if (!el) return;
+          if (window.__omnideckMuted) {
+            if (!el.__odForcedMute) {
+              el.__odWasMuted = Boolean(el.muted);
+              el.__odForcedMute = true;
+            }
+            el.muted = true;
+          } else if (el.__odForcedMute) {
+            // Only restore elements that OmniDeck itself muted; never unmute site-muted feed previews (e.g. YouTube Home)
+            el.muted = Boolean(el.__odWasMuted);
+            el.__odForcedMute = false;
+          }
+        } catch {}
       };
       const applyAll = () => {
         document.querySelectorAll('audio, video').forEach(applyEl);
@@ -65,12 +78,12 @@ function buildMuteScript(muted: boolean): string {
         window.__omnideckMuteBound = true;
         document.addEventListener('play', (ev) => {
           if (ev && ev.target && (ev.target.tagName === 'AUDIO' || ev.target.tagName === 'VIDEO')) {
-            applyEl(ev.target);
+            if (window.__omnideckMuted) applyEl(ev.target);
           }
         }, true);
         let timer = null;
         window.__omnideckMuteObserver = new MutationObserver(() => {
-          if (timer) return;
+          if (!window.__omnideckMuted || timer) return;
           timer = setTimeout(() => { timer = null; applyAll(); }, 300);
         });
         window.__omnideckMuteObserver.observe(document.body || document.documentElement, {
@@ -81,6 +94,26 @@ function buildMuteScript(muted: boolean): string {
     })();
     true;
   `;
+}
+
+function isBlockedAppHijackUrl(rawUrl: string): boolean {
+  const lower = (rawUrl || '').trim().toLowerCase();
+  if (!lower) return false;
+  if (
+    lower.startsWith('intent://') ||
+    lower.startsWith('reddit://') ||
+    lower.startsWith('spotify://') ||
+    lower.startsWith('vnd.youtube://') ||
+    lower.startsWith('youtube://') ||
+    lower.startsWith('market://')
+  ) {
+    return true;
+  }
+  return (
+    lower.includes('reddit.app.link') ||
+    lower.includes('spotify.app.link') ||
+    lower.includes('play.google.com/store/apps')
+  );
 }
 
 function buildMobileMediaBridgeScript(serviceId: string): string {
@@ -275,6 +308,9 @@ export function ServiceWebViewStack({
                 }
               }}
               onShouldStartLoadWithRequest={(req): boolean => {
+                if (req.url && isBlockedAppHijackUrl(req.url)) {
+                  return false;
+                }
                 if (smartLinkRouting && req.url && /^https?:\/\//i.test(req.url)) {
                   const matched = matchServiceForUrl(req.url, allServices, svc.id);
                   if (matched) {

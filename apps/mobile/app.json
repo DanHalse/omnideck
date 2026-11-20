@@ -2,7 +2,7 @@
   "expo": {
     "name": "OmniDeck",
     "slug": "omnideck-mobile",
-    "version": "1.4.0",
+    "version": "1.4.1",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -13,6 +13,7 @@
     },
     "android": {
       "package": "dev.omnideck.mobile",
+      "versionCode": 2,
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#0D0F12"

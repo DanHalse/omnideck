@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildMobilePowerUpsScript,
   cleanTrackAndArtist,
   computeListeningStatsSummary,
   createDefaultConfig,
+  DEFAULT_POWER_UPS,
   findActiveLyricIndex,
   mergeAiCompanionConfig,
   mergeEqualizerConfig,
@@ -135,5 +137,17 @@ describe('v1.4.0 audio, lyrics, AI & listening stats utilities', () => {
     };
     expect(exported.config.settings.aiCompanion.apiKey).toBe('');
     expect(exported.config.settings.aiCompanion.provider).toBe('openai');
+  });
+
+  it('generates Reddit mobile anti-app-nag and Spotify mobile responsive drawer scripts', () => {
+    const redditScript = buildMobilePowerUpsScript('reddit', DEFAULT_POWER_UPS);
+    expect(redditScript).toContain('__od_reddit_mobile_anti_xpromo');
+    expect(redditScript).toContain('xpromo-app-selector');
+    expect(redditScript).toContain('unlockScroll');
+
+    const spotifyScript = buildMobilePowerUpsScript('spotify', DEFAULT_POWER_UPS);
+    expect(spotifyScript).toContain('__od_spotify_mobile_css');
+    expect(spotifyScript).toContain('__od_sp_lib_btn');
+    expect(spotifyScript).toContain('width=device-width');
   });
 });

@@ -217,15 +217,29 @@ export function extractTwitchChannelLogin(rawUrl: string): string | null {
 }
 
 /**
- * Lightweight Power-Ups script shared with the Android Mobile WebView app:
- * - YouTube: Hide Shorts shelves + Auto-dismiss "Are you still listening?"
+ * Lightweight Power-Ups & mobile-ergonomics script shared with the Android Mobile WebView app:
+ * - YouTube / YT Music: Hide Shorts shelves, Auto-dismiss "Still listening?", enforce native mobile viewport
  * - Twitch: Auto-claim Channel Points bonus chest
- * - Reddit: Hide promoted posts + auto-collapse AutoModerator
+ * - Reddit: Dismiss/hide unclosable "Open in Reddit App" / xpromo popups, hide promoted posts, collapse AutoMod
+ * - Spotify: Transform desktop Widevine Web Player into a touch-friendly responsive mobile layout with toggleable Library drawer
  */
 export function buildMobilePowerUpsScript(serviceId: string, powerUps: PowerUpsConfig): string {
   const parts: string[] = [];
 
   if (serviceId === 'youtube' || serviceId === 'youtube-music') {
+    if (serviceId === 'youtube-music') {
+      parts.push(`
+        (function(){
+          var vp = document.querySelector('meta[name="viewport"]');
+          if (!vp) {
+            vp = document.createElement('meta');
+            vp.name = 'viewport';
+            (document.head || document.documentElement).appendChild(vp);
+          }
+          vp.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
+        })();
+      `);
+    }
     if (serviceId === 'youtube' && powerUps.youtubeHideShorts) {
       parts.push(`
         (function(){
@@ -268,6 +282,163 @@ export function buildMobilePowerUpsScript(serviceId: string, powerUps: PowerUpsC
   }
 
   if (serviceId === 'reddit') {
+    parts.push(`
+      (function(){
+        if (!document.getElementById('__od_reddit_mobile_anti_xpromo')) {
+          const st = document.createElement('style');
+          st.id = '__od_reddit_mobile_anti_xpromo';
+          st.textContent = [
+            'shreddit-async-loader[bundlename*="xpromo"],',
+            'xpromo-app-selector,',
+            'xpromo-nsfw-blocking-modal-desktop,',
+            'xpromo-nsfw-bypassable-modal-desktop,',
+            'xpromo-nsfw-blocking-container,',
+            'shreddit-xpromo-bottom-sheet,',
+            'shreddit-experience-tree [slot="get-app"],',
+            '#get-app-button,',
+            '[data-testid="xpromo-bottom-sheet"],',
+            '[data-testid="get-app-button"],',
+            '.XPromoPopup, .XPromoPill, .XPromoBanner, .XPromoInFeed,',
+            'shreddit-async-loader[bundlename="bottom_bar_xpromo"],',
+            'faceplate-banner[appearance="xpromo"],',
+            'a[href*="reddit.app.link"],',
+            '#blocking-modal {',
+            '  display: none !important;',
+            '  pointer-events: none !important;',
+            '  visibility: hidden !important;',
+            '}'
+          ].join(' ');
+          (document.head || document.documentElement).appendChild(st);
+        }
+
+        const isAuthPath = function() {
+          const p = (window.location.pathname || '').toLowerCase();
+          return p.startsWith('/login') || p.startsWith('/register') || p.startsWith('/account');
+        };
+
+        const unlockScroll = function() {
+          if (isAuthPath()) return;
+          try {
+            if (document.documentElement) {
+              document.documentElement.style.overflow = '';
+              document.documentElement.style.position = '';
+              document.documentElement.classList.remove('scroll-disabled', 'overflow-hidden');
+            }
+            if (document.body) {
+              document.body.style.overflow = '';
+              document.body.style.position = '';
+              document.body.style.pointerEvents = '';
+              document.body.classList.remove('scroll-disabled', 'overflow-hidden');
+            }
+            document.querySelectorAll('[inert]').forEach(function(el) {
+              el.removeAttribute('inert');
+            });
+          } catch {}
+        };
+
+        const isAppNagText = function(txt) {
+          const t = (txt || '').toLowerCase();
+          return (
+            t.includes('see reddit in') ||
+            t.includes('open in app') ||
+            t.includes('open in the reddit app') ||
+            t.includes('use the reddit app') ||
+            t.includes('get the reddit app') ||
+            t.includes('continue in chrome') ||
+            t.includes('continue in browser') ||
+            t.includes('log in with the app') ||
+            t.includes('view in app')
+          );
+        };
+
+        const sweepNode = function(root) {
+          if (!root || isAuthPath()) return;
+          let removedAny = false;
+          const candidates = root.querySelectorAll
+            ? root.querySelectorAll(
+                'xpromo-app-selector, shreddit-xpromo-bottom-sheet, shreddit-async-loader[bundlename*="xpromo"], faceplate-bottom-sheet, faceplate-dialog, rpl-dialog, rpl-modal-card, [role="dialog"], [aria-modal="true"], #blocking-modal'
+              )
+            : [];
+          candidates.forEach(function(el) {
+            const tag = (el.tagName || '').toLowerCase();
+            const txt = (el.textContent || '') + ' ' + ((el.shadowRoot && el.shadowRoot.textContent) || '');
+            const hasAppLink = Boolean(
+              (el.querySelector && el.querySelector('a[href*="app.link"], a[href*="play.google.com"], [data-testid*="xpromo"]')) ||
+              (el.shadowRoot && el.shadowRoot.querySelector('a[href*="app.link"], a[href*="play.google.com"]'))
+            );
+            const isXpromo = tag.includes('xpromo') || el.id === 'blocking-modal' || hasAppLink || isAppNagText(txt);
+            if (!isXpromo) return;
+
+            // Try clicking Reddit's own "Continue" / "Continue in browser" button if present first
+            const btnRoot = el.shadowRoot || el;
+            const btns = btnRoot.querySelectorAll ? btnRoot.querySelectorAll('button, a') : [];
+            for (const b of btns) {
+              const label = ((b.textContent || '') + ' ' + (b.getAttribute('aria-label') || '')).toLowerCase().trim();
+              if (
+                label === 'continue' ||
+                label.includes('continue in chrome') ||
+                label.includes('continue in browser') ||
+                label.includes('not now') ||
+                label.includes('stay on web') ||
+                label === 'close'
+              ) {
+                try { b.click(); } catch {}
+                break;
+              }
+            }
+            try {
+              el.style.setProperty('display', 'none', 'important');
+              el.style.setProperty('pointer-events', 'none', 'important');
+              el.removeAttribute('open');
+              removedAny = true;
+            } catch {}
+          });
+
+          // Walk into open shadow roots of shreddit custom elements
+          if (root.querySelectorAll) {
+            root.querySelectorAll('shreddit-app, shreddit-experience-tree, shreddit-async-loader, xpromo-app-selector, faceplate-bottom-sheet').forEach(function(host) {
+              if (host.shadowRoot) sweepNode(host.shadowRoot);
+            });
+          }
+
+          if (removedAny) unlockScroll();
+        };
+
+        if (!window.__odRedditAntiNagBound) {
+          window.__odRedditAntiNagBound = true;
+          sweepNode(document);
+          setInterval(function() { sweepNode(document); }, 1200);
+
+          // Ensure "Log in" / "I already have an account" inside any stuck modal goes cleanly to /login/
+          document.addEventListener('click', function(ev) {
+            if (isAuthPath()) return;
+            const path = typeof ev.composedPath === 'function' ? ev.composedPath() : [ev.target];
+            for (const n of path) {
+              if (!n || !n.tagName) continue;
+              const tag = n.tagName.toLowerCase();
+              if (tag === 'a' && n.href && /reddit\\.app\\.link|play\\.google\\.com\\/store/i.test(n.href)) {
+                ev.preventDefault();
+                ev.stopPropagation();
+                sweepNode(document);
+                return;
+              }
+              if (tag === 'button' || tag === 'a') {
+                const label = (n.textContent || '').toLowerCase().trim();
+                if (label.includes('already have an account')) {
+                  ev.preventDefault();
+                  ev.stopPropagation();
+                  window.location.href = 'https://www.reddit.com/login/';
+                  return;
+                }
+              }
+            }
+          }, true);
+        } else {
+          sweepNode(document);
+        }
+      })();
+    `);
+
     if (powerUps.redditHidePromoted) {
       parts.push(`
         (function(){
@@ -294,6 +465,129 @@ export function buildMobilePowerUpsScript(serviceId: string, powerUps: PowerUpsC
         })();
       `);
     }
+  }
+
+  if (serviceId === 'spotify') {
+    parts.push(`
+      (function(){
+        // Enforce crisp 1:1 mobile viewport scaling on Spotify Web Player
+        var vp = document.querySelector('meta[name="viewport"]');
+        if (!vp) {
+          vp = document.createElement('meta');
+          vp.name = 'viewport';
+          (document.head || document.documentElement).appendChild(vp);
+        }
+        vp.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
+
+        if (!document.getElementById('__od_spotify_mobile_css')) {
+          const st = document.createElement('style');
+          st.id = '__od_spotify_mobile_css';
+          st.textContent = [
+            'html, body, #main, .Root, .Root__top-container {',
+            '  min-width: 0 !important;',
+            '  max-width: 100vw !important;',
+            '  overflow-x: hidden !important;',
+            '}',
+            '.Root__top-container {',
+            '  grid-template-columns: minmax(0, 1fr) !important;',
+            '  grid-template-areas: "global-nav" "main-view" "now-playing-bar" !important;',
+            '  gap: 0 !important;',
+            '  padding: 0 !important;',
+            '}',
+            '/* Hide desktop Right Sidebar & Install/Premium nags on mobile */',
+            '.Root__right-sidebar, aside[aria-label*="Now playing" i], [data-testid="right-sidebar"],',
+            'a[href*="/download"], [data-testid="upgrade-button"], [data-testid="install-app-banner"] {',
+            '  display: none !important;',
+            '}',
+            '/* Collapse desktop Left Library Sidebar into a slide-over drawer toggled by OmniDeck pill */',
+            '#Desktop_LeftSidebar_Id, .Root__nav-bar {',
+            '  position: fixed !important;',
+            '  top: 0 !important; left: 0 !important; bottom: 72px !important;',
+            '  width: 84vw !important; max-width: 320px !important;',
+            '  z-index: 9998 !important;',
+            '  transform: translateX(-105%) !important;',
+            '  transition: transform 200ms ease !important;',
+            '  box-shadow: 12px 0 36px rgba(0,0,0,0.65) !important;',
+            '}',
+            'html.__od-sp-lib-open #Desktop_LeftSidebar_Id,',
+            'html.__od-sp-lib-open .Root__nav-bar {',
+            '  transform: translateX(0) !important;',
+            '}',
+            '/* Keep main view full-width and touch-friendly */',
+            '.Root__main-view, [data-testid="main-view"] {',
+            '  min-width: 0 !important;',
+            '  width: 100vw !important;',
+            '  border-radius: 0 !important;',
+            '}',
+            '/* Compact Spotify global nav & search bar for phone width */',
+            '#global-nav-bar, [data-testid="global-nav-bar"] {',
+            '  padding: 6px 8px 6px 52px !important;',
+            '  gap: 6px !important;',
+            '  min-height: 48px !important;',
+            '}',
+            '[data-testid="search-input"] {',
+            '  min-width: 0 !important;',
+            '}',
+            '/* Compact bottom player bar so controls fit cleanly on 360-430px screens */',
+            '.Root__now-playing-bar, [data-testid="now-playing-bar"] {',
+            '  min-width: 0 !important;',
+            '  padding: 4px 8px !important;',
+            '}',
+            '[data-testid="now-playing-bar"] > div:last-child,',
+            '.volume-bar {',
+            '  display: none !important;',
+            '}',
+            '/* Floating Library Drawer toggle button */',
+            '#__od_sp_lib_btn {',
+            '  position: fixed !important;',
+            '  top: 8px !important; left: 8px !important;',
+            '  z-index: 9999 !important;',
+            '  height: 34px !important; width: 36px !important;',
+            '  border-radius: 9px !important;',
+            '  border: 1px solid rgba(255,255,255,0.18) !important;',
+            '  background: rgba(24,24,24,0.92) !important;',
+            '  color: #ffffff !important;',
+            '  font-size: 16px !important;',
+            '  font-weight: 700 !important;',
+            '  display: flex !important; align-items: center !important; justify-content: center !important;',
+            '  box-shadow: 0 4px 12px rgba(0,0,0,0.4) !important;',
+            '}'
+          ].join('\\n');
+          (document.head || document.documentElement).appendChild(st);
+        }
+
+        if (!document.getElementById('__od_sp_lib_btn') && document.body) {
+          const btn = document.createElement('button');
+          btn.id = '__od_sp_lib_btn';
+          btn.type = 'button';
+          btn.setAttribute('aria-label', 'Toggle Spotify Library');
+          btn.textContent = '☰';
+          btn.addEventListener('click', function(ev) {
+            ev.stopPropagation();
+            const open = document.documentElement.classList.toggle('__od-sp-lib-open');
+            btn.textContent = open ? '✕' : '☰';
+          });
+          document.body.appendChild(btn);
+
+          document.addEventListener('click', function(ev) {
+            if (!document.documentElement.classList.contains('__od-sp-lib-open')) return;
+            const target = ev.target;
+            if (target && target.closest && (target.closest('#Desktop_LeftSidebar_Id') || target.closest('.Root__nav-bar') || target.closest('#__od_sp_lib_btn'))) {
+              // If user tapped a playlist/library link inside the sidebar, auto-close drawer smoothly
+              if (target.closest('a, [role="listitem"], [data-testid="rootlist-item"]')) {
+                setTimeout(function() {
+                  document.documentElement.classList.remove('__od-sp-lib-open');
+                  btn.textContent = '☰';
+                }, 150);
+              }
+              return;
+            }
+            document.documentElement.classList.remove('__od-sp-lib-open');
+            btn.textContent = '☰';
+          }, true);
+        }
+      })();
+    `);
   }
 
   if (parts.length === 0) return 'true;';
