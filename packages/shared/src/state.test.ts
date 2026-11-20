@@ -6,9 +6,12 @@ import {
   computeDesktopLayoutBounds,
   createDefaultConfig,
   createInitialRuntimeState,
+  DEFAULT_POWER_UPS,
   DEFAULT_SERVICES,
   deleteCustomWorkspace,
   extractBadgeCountFromTitle,
+  extractTwitchChannelLogin,
+  extractYouTubeVideoId,
   getVisibleServices,
   isInAppPopupUrl,
   matchServiceForUrl,
@@ -21,12 +24,14 @@ import {
   removeCustomService,
   removeFavorite,
   resolveElectronPartition,
+  rewriteUrlForPowerUps,
   saveCustomWorkspace,
   selectActiveService,
   serializeConfigForExport,
   setServiceVolume,
   setSplitRatio,
   shouldAutoHibernate,
+  shouldSoftThrottle,
   swapSplitPanes,
   toggleServiceAdBlock,
   toggleServiceVisibility,
@@ -194,21 +199,40 @@ describe('Split-view, hibernation & desktop layout bounds', () => {
     expect(config.splitView.ratio).toBe(0.25);
   });
 
-  it('auto-hibernates idle silent tabs but NEVER hibernates audio-playing or visible tabs', () => {
+  it('auto-hibernates idle silent tabs, protects Spotify Connect & audio, and triggers Tier-1 soft throttling', () => {
     const config = createDefaultConfig();
     const now = 1_000_000_000;
+    const tenMinAgo = now - 10 * 60_000;
     const fortyMinAgo = now - 40 * 60_000;
 
+    const redditSilent = {
+      ...createInitialRuntimeState(DEFAULT_SERVICES[4]),
+      mounted: true,
+      audible: false,
+      lastActiveAt: fortyMinAgo,
+    };
+    expect(shouldAutoHibernate(redditSilent, config, now)).toBe(true);
+    expect(shouldSoftThrottle({ ...redditSilent, lastActiveAt: tenMinAgo }, config, now, 5)).toBe(true);
+
+    // Spotify Connect keep-alive protects Spotify by default, unless disabled
     const spotifySilent = {
       ...createInitialRuntimeState(DEFAULT_SERVICES[2]),
       mounted: true,
       audible: false,
       lastActiveAt: fortyMinAgo,
     };
-    expect(shouldAutoHibernate(spotifySilent, config, now)).toBe(true);
+    expect(shouldAutoHibernate(spotifySilent, config, now)).toBe(false);
+    const spotifySleepConfig = {
+      ...config,
+      settings: {
+        ...config.settings,
+        powerUps: { ...config.settings.powerUps, spotifyKeepConnectAlive: false },
+      },
+    };
+    expect(shouldAutoHibernate(spotifySilent, spotifySleepConfig, now)).toBe(true);
 
     const spotifyPlaying = { ...spotifySilent, audible: true };
-    expect(shouldAutoHibernate(spotifyPlaying, config, now)).toBe(false);
+    expect(shouldAutoHibernate(spotifyPlaying, spotifySleepConfig, now)).toBe(false);
 
     const activeYouTube = {
       ...createInitialRuntimeState(DEFAULT_SERVICES[0]),
@@ -370,5 +394,52 @@ describe('v1.2 Native Cockpit — Search, Smart Link Routing, Favorites, History
     expect(config.services.find((s) => s.id === 'spotify')?.volume).toBe(0.35);
     config = setServiceVolume(config, 'spotify', 1.8);
     expect(config.services.find((s) => s.id === 'spotify')?.volume).toBe(1.0);
+  });
+});
+
+describe('v1.3 Power-Ups — URL Rewrites, Extractors & Auth Preservation', () => {
+  it('converts YouTube Shorts to full watch player and launches Audible straight to Library', () => {
+    expect(
+      rewriteUrlForPowerUps('youtube', 'https://www.youtube.com/shorts/dQw4w9WgXcQ', DEFAULT_POWER_UPS),
+    ).toBe('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+
+    expect(
+      rewriteUrlForPowerUps('audible', 'https://www.audible.com/', DEFAULT_POWER_UPS),
+    ).toBe('https://www.audible.com/library/titles');
+
+    expect(
+      rewriteUrlForPowerUps('audible', 'https://www.audible.co.uk/', DEFAULT_POWER_UPS),
+    ).toBe('https://www.audible.co.uk/library/titles');
+
+    // Never rewrites login/auth endpoints
+    expect(
+      rewriteUrlForPowerUps('audible', 'https://www.audible.com/ap/signin', DEFAULT_POWER_UPS),
+    ).toBeNull();
+    expect(
+      rewriteUrlForPowerUps('reddit', 'https://www.reddit.com/login', {
+        ...DEFAULT_POWER_UPS,
+        redditUseOldReddit: true,
+      }),
+    ).toBeNull();
+
+    // Switches to old.reddit.com when enabled
+    expect(
+      rewriteUrlForPowerUps('reddit', 'https://www.reddit.com/r/linux/', {
+        ...DEFAULT_POWER_UPS,
+        redditUseOldReddit: true,
+      }),
+    ).toBe('https://old.reddit.com/r/linux/');
+  });
+
+  it('extracts YouTube video IDs and Twitch channel logins cleanly', () => {
+    expect(extractYouTubeVideoId('https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s')).toBe('dQw4w9WgXcQ');
+    expect(extractYouTubeVideoId('https://music.youtube.com/watch?v=abcDEF_1234')).toBe('abcDEF_1234');
+    expect(extractYouTubeVideoId('https://youtu.be/dQw4w9WgXcQ')).toBe('dQw4w9WgXcQ');
+    expect(extractYouTubeVideoId('https://www.youtube.com/')).toBeNull();
+
+    expect(extractTwitchChannelLogin('https://www.twitch.tv/shroud')).toBe('shroud');
+    expect(extractTwitchChannelLogin('https://www.twitch.tv/popout/shroud/chat')).toBe('shroud');
+    expect(extractTwitchChannelLogin('https://www.twitch.tv/directory/following')).toBeNull();
+    expect(extractTwitchChannelLogin('https://www.twitch.tv/settings/profile')).toBeNull();
   });
 });

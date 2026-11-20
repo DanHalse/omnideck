@@ -2,8 +2,11 @@ import React, { useEffect } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import WebView, { type WebViewNavigation } from 'react-native-webview';
 import {
+  buildMobilePowerUpsScript,
   DESKTOP_LINUX_CHROME_UA,
   MOBILE_ANDROID_CHROME_UA,
+  rewriteUrlForPowerUps,
+  type PowerUpsConfig,
   type ServiceDefinition,
 } from '@omnideck/shared';
 import type { MobilePalette } from '../theme';
@@ -31,6 +34,7 @@ interface ServiceWebViewStackProps {
   hibernatedIds: Set<string>;
   mutedIds: Set<string>;
   desktopModeOverrides: Record<string, boolean>;
+  powerUps: PowerUpsConfig;
   webViewRefs: React.MutableRefObject<Record<string, WebViewHandle | null>>;
   onNavStateChange: (serviceId: string, nav: MobileNavState) => void;
   onWakeService: (serviceId: string) => void;
@@ -40,15 +44,26 @@ function buildMuteScript(muted: boolean): string {
   return `
     (function() {
       window.__omnideckMuted = ${muted ? 'true' : 'false'};
-      const apply = () => {
-        document.querySelectorAll('audio, video').forEach((el) => {
-          el.muted = window.__omnideckMuted;
-        });
+      const applyEl = (el) => {
+        try { if (el) el.muted = window.__omnideckMuted; } catch {}
       };
-      apply();
-      if (!window.__omnideckMuteObserver) {
-        window.__omnideckMuteObserver = new MutationObserver(apply);
-        window.__omnideckMuteObserver.observe(document.documentElement || document.body, {
+      const applyAll = () => {
+        document.querySelectorAll('audio, video').forEach(applyEl);
+      };
+      applyAll();
+      if (!window.__omnideckMuteBound) {
+        window.__omnideckMuteBound = true;
+        document.addEventListener('play', (ev) => {
+          if (ev && ev.target && (ev.target.tagName === 'AUDIO' || ev.target.tagName === 'VIDEO')) {
+            applyEl(ev.target);
+          }
+        }, true);
+        let timer = null;
+        window.__omnideckMuteObserver = new MutationObserver(() => {
+          if (timer) return;
+          timer = setTimeout(() => { timer = null; applyAll(); }, 300);
+        });
+        window.__omnideckMuteObserver.observe(document.body || document.documentElement, {
           childList: true,
           subtree: true
         });
@@ -61,7 +76,7 @@ function buildMuteScript(muted: boolean): string {
 /**
  * Keeps every visited service's native Android WebView mounted in a z-indexed stack
  * instead of unmounting on tab change — delivering instant swaps, shared persistent cookies,
- * and uninterrupted background audio playback (Spotify / Audible / YouTube Music while on Reddit).
+ * uninterrupted background audio playback, and lightweight mobile Power-Ups.
  */
 export function ServiceWebViewStack({
   palette,
@@ -71,6 +86,7 @@ export function ServiceWebViewStack({
   hibernatedIds,
   mutedIds,
   desktopModeOverrides,
+  powerUps,
   webViewRefs,
   onNavStateChange,
   onWakeService,
@@ -128,7 +144,9 @@ export function ServiceWebViewStack({
         const useDesktopUa =
           desktopModeOverrides[svc.id] ?? svc.mobileUserAgentMode === 'desktop';
         const userAgent = useDesktopUa ? DESKTOP_LINUX_CHROME_UA : MOBILE_ANDROID_CHROME_UA;
-        const targetUri = useDesktopUa ? svc.url : (svc.mobileUrl || svc.url);
+        const rawUri = useDesktopUa ? svc.url : (svc.mobileUrl || svc.url);
+        const targetUri = rewriteUrlForPowerUps(svc.id, rawUri, powerUps) ?? rawUri;
+        const combinedInjectedScript = `${buildMuteScript(mutedIds.has(svc.id))}\n${buildMobilePowerUpsScript(svc.id, powerUps)}`;
 
         return (
           <View
@@ -156,7 +174,7 @@ export function ServiceWebViewStack({
               mediaPlaybackRequiresUserAction={false}
               setSupportMultipleWindows={false}
               mixedContentMode="compatibility"
-              injectedJavaScript={buildMuteScript(mutedIds.has(svc.id))}
+              injectedJavaScript={combinedInjectedScript}
               onNavigationStateChange={(nav: WebViewNavigation): void => {
                 onNavStateChange(svc.id, {
                   canGoBack: nav.canGoBack,
@@ -167,8 +185,8 @@ export function ServiceWebViewStack({
               }}
               onLoadEnd={(): void => {
                 const ref = webViewRefs.current[svc.id];
-                if (ref && mutedIds.has(svc.id)) {
-                  ref.injectJavaScript(buildMuteScript(true));
+                if (ref) {
+                  ref.injectJavaScript(combinedInjectedScript);
                 }
               }}
               style={styles.webview}

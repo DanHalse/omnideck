@@ -89,6 +89,37 @@ export interface SplitViewState {
   ratio: number;
 }
 
+export interface PowerUpsConfig {
+  // YouTube & YouTube Music
+  youtubeSponsorBlock: boolean;
+  youtubeHideShorts: boolean;
+  youtubeAutoDismissStillListening: boolean;
+  youtubeRememberSpeedQuality: boolean;
+
+  // Twitch
+  twitchThirdPartyEmotes: boolean;
+  twitchAutoClaimPoints: boolean;
+  twitchAutoTheater: boolean;
+  twitchPauseChatOnHover: boolean;
+
+  // Audible
+  audibleDirectToLibrary: boolean;
+  audibleDockCloudPlayer: boolean;
+  audibleFadeSleepAndRewind: boolean;
+  audibleWhisperSyncFlush: boolean;
+
+  // Reddit (RES-Lite)
+  redditCompactDensity: boolean;
+  redditUseOldReddit: boolean;
+  redditKeyboardNav: boolean;
+  redditCollapseAutoMod: boolean;
+  redditHidePromoted: boolean;
+
+  // Spotify
+  spotifyKeepConnectAlive: boolean;
+  spotifyLikeShortcut: string;
+}
+
 export interface AppSettings {
   navPosition: NavPosition;
   theme: ThemeMode;
@@ -124,6 +155,10 @@ export interface AppSettings {
   doNotDisturb: boolean;
   /** Automatically check GitHub Releases for new versions and download in background. */
   autoCheckUpdates: boolean;
+  /** Enable GPU/VA-API hardware video acceleration (takes effect on app restart). */
+  hardwareVideoAcceleration: boolean;
+  /** Curated per-platform quality-of-life Power-Ups. */
+  powerUps: PowerUpsConfig;
 }
 
 export interface PersistedConfig {
@@ -143,6 +178,7 @@ export interface ServiceRuntimeState {
   serviceId: string;
   mounted: boolean;
   hibernated: boolean;
+  softThrottled?: boolean;
   loading: boolean;
   audible: boolean;
   muted: boolean;
@@ -155,6 +191,7 @@ export interface ServiceRuntimeState {
   lastActiveAt: number;
   badgeCount: number;
   blockedRequests: number;
+  memoryMb?: number;
 }
 
 export interface NowPlayingState {
@@ -173,6 +210,7 @@ export interface SleepTimerState {
   active: boolean;
   endsAt: number | null;
   durationMinutes: number;
+  fading?: boolean;
 }
 
 export type UpdatePhase =
@@ -216,6 +254,8 @@ export interface DesktopSnapshot {
   alwaysOnTop: boolean;
   isMaximized: boolean;
   totalBlockedRequests: number;
+  totalMemoryMb: number;
+  audibleDockOpen: boolean;
   toastMessage: string | null;
 }
 

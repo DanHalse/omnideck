@@ -41,6 +41,7 @@ interface NavBarProps {
   secondaryServiceId: string | null;
   doNotDisturb: boolean;
   browserBarVisible: boolean;
+  audibleDockOpen: boolean;
   isMaximized: boolean;
   toastMessage: string | null;
   update: UpdateState;
@@ -50,6 +51,7 @@ interface NavBarProps {
   onToggleMute: (id: string) => void;
   onToggleDnd: () => void;
   onToggleBrowserBar: () => void;
+  onCloseAudibleDock: () => void;
   onPinCurrentPage: () => void;
   onOpenCommandPalette: () => void;
   onOpenMixer: () => void;
@@ -76,6 +78,7 @@ export function NavBar({
   secondaryServiceId,
   doNotDisturb,
   browserBarVisible,
+  audibleDockOpen,
   isMaximized,
   toastMessage,
   update,
@@ -85,6 +88,7 @@ export function NavBar({
   onToggleMute,
   onToggleDnd,
   onToggleBrowserBar,
+  onCloseAudibleDock,
   onPinCurrentPage,
   onOpenCommandPalette,
   onOpenMixer,
@@ -446,6 +450,17 @@ export function NavBar({
       </div>
 
       <div className="topbar__actions no-drag">
+        {audibleDockOpen && activeServiceId === 'audible' && !homeActive && (
+          <button
+            type="button"
+            className="pill-btn"
+            title="Close docked Audible Cloud Player & flush WhisperSync"
+            onClick={onCloseAudibleDock}
+          >
+            <span>Close Player</span>
+          </button>
+        )}
+
         {showUpdatePill && (
           <button
             type="button"

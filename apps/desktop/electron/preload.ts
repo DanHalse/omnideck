@@ -41,6 +41,8 @@ const api: OmniDeckBridge = {
   setZoom: (serviceId, zoomFactor) => ipcRenderer.invoke('omnideck:set-zoom', serviceId, zoomFactor),
   hibernateService: (serviceId) => ipcRenderer.invoke('omnideck:hibernate', serviceId),
   hibernateInactive: () => ipcRenderer.invoke('omnideck:hibernate-inactive'),
+  hibernateHeavyTabs: (thresholdMb) => ipcRenderer.invoke('omnideck:hibernate-heavy', thresholdMb),
+  refreshMemoryMetrics: () => ipcRenderer.invoke('omnideck:refresh-memory'),
   wakeService: (serviceId) => ipcRenderer.invoke('omnideck:wake', serviceId),
   openExternal: (serviceId) => ipcRenderer.invoke('omnideck:open-external', serviceId),
   openDevTools: (serviceId) => ipcRenderer.invoke('omnideck:open-devtools', serviceId),
@@ -53,10 +55,12 @@ const api: OmniDeckBridge = {
   mediaPlayPause: (serviceId) => ipcRenderer.invoke('omnideck:media-play-pause', serviceId),
   mediaNext: (serviceId) => ipcRenderer.invoke('omnideck:media-next', serviceId),
   mediaPrevious: (serviceId) => ipcRenderer.invoke('omnideck:media-previous', serviceId),
+  mediaLikeTrack: (serviceId) => ipcRenderer.invoke('omnideck:media-like', serviceId),
   resumeAutoPaused: () => ipcRenderer.invoke('omnideck:resume-auto-paused'),
   setSleepTimer: (minutes) => ipcRenderer.invoke('omnideck:set-sleep-timer', minutes),
   triggerPip: (serviceId) => ipcRenderer.invoke('omnideck:trigger-pip', serviceId),
   toggleAlwaysOnTop: () => ipcRenderer.invoke('omnideck:toggle-always-on-top'),
+  closeAudibleDock: () => ipcRenderer.invoke('omnideck:close-audible-dock'),
 
   windowMinimize: () => ipcRenderer.invoke('omnideck:window-minimize'),
   windowToggleMaximize: () => ipcRenderer.invoke('omnideck:window-toggle-maximize'),
@@ -76,6 +80,7 @@ const api: OmniDeckBridge = {
     ipcRenderer.invoke('omnideck:delete-workspace', workspaceId),
 
   updateSettings: (patch) => ipcRenderer.invoke('omnideck:update-settings', patch),
+  updatePowerUps: (patch) => ipcRenderer.invoke('omnideck:update-power-ups', patch),
   addCustomService: (input) => ipcRenderer.invoke('omnideck:add-custom-service', input),
   updateService: (serviceId, patch) =>
     ipcRenderer.invoke('omnideck:update-service', serviceId, patch),

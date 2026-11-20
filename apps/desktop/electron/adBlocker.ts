@@ -1,9 +1,24 @@
 /**
- * Lightweight, zero-overhead network-level Ad & Tracker Shield for Electron sessions.
+ * High-speed O(1) hostname-first network-level Ad & Tracker Shield for Electron sessions.
  *
- * Explicitly avoids blocking authentication, DRM license servers (Widevine / Spotify / Audible),
- * CDN media chunks, or core application APIs so sign-in and streaming stay 100% reliable.
+ * Explicitly allowlists authentication, DRM license servers (Widevine / Spotify / Audible),
+ * and OmniDeck Power-Up APIs (SponsorBlock, 7TV, BTTV, FFZ) before running any pattern rules.
  */
+
+const ALLOWLIST_DOMAINS = new Set<string>([
+  'accounts.google.com',
+  'accounts.youtube.com',
+  'myaccount.google.com',
+  'apis.google.com',
+  'gstatic.com',
+  'sponsor.ajay.app',
+  '7tv.io',
+  'cdn.7tv.app',
+  'api.betterttv.net',
+  'cdn.betterttv.net',
+  'api.frankerfacez.com',
+  'cdn.frankerfacez.com',
+]);
 
 const BLOCKED_DOMAINS = new Set<string>([
   // Google / YouTube ad & tracking infrastructure
@@ -27,7 +42,8 @@ const BLOCKED_DOMAINS = new Set<string>([
   'analytics.twitter.com',
   'adeventtracker.spotify.com',
   'audio-sp-ad.spotifycdn.com',
-  'spclient.wg.spotify.com/ad-logic',
+  'spade.twitch.tv',
+  'client-event-reporter.twitch.tv',
   'scorecardresearch.com',
   'quantserve.com',
   'taboola.com',
@@ -56,34 +72,21 @@ const BLOCKED_URL_PATTERNS: RegExp[] = [
   /youtube\.com\/get_midroll_info/i,
   /youtube\.com\/youtubei\/v1\/log_event/i,
   /spotify\.com\/ad-logic\//i,
-  /spade\.twitch\.tv\//i,
-  /client-event-reporter\.twitch\.tv\//i,
   /reddit\.com\/svc\/shreddit\/events/i,
   /\/pixel\/(track|beacon)/i,
   /[?&]adformat=/i,
 ];
 
-const ALLOWLIST_PATTERNS: RegExp[] = [
-  /accounts\.google\.com/i,
-  /accounts\.youtube\.com/i,
-  /myaccount\.google\.com/i,
-  /apis\.google\.com/i,
-  /gstatic\.com/i,
-  /widevine/i,
-  /license/i,
-  /eme/i,
-  /oauth/i,
-  /signin|login|auth/i,
-];
+const ALLOWLIST_PATH_RE = /widevine|license|\/eme|oauth|signin|login|auth/i;
 
-function matchesBlockedDomain(hostname: string): boolean {
+function matchesDomainSet(hostname: string, domainSet: Set<string>): boolean {
   const lower = hostname.toLowerCase();
-  if (BLOCKED_DOMAINS.has(lower)) return true;
+  if (domainSet.has(lower)) return true;
 
   let dot = lower.indexOf('.');
   while (dot !== -1) {
     const parent = lower.slice(dot + 1);
-    if (BLOCKED_DOMAINS.has(parent)) return true;
+    if (domainSet.has(parent)) return true;
     dot = lower.indexOf('.', dot + 1);
   }
   return false;
@@ -106,12 +109,34 @@ export function shouldBlockNetworkRequest(rawUrl: string, resourceType?: string)
     return false;
   }
 
-  if (ALLOWLIST_PATTERNS.some((re) => re.test(rawUrl))) {
+  // O(1) hostname allowlist fast path (Google Auth, gstatic, SponsorBlock, 7TV/BTTV/FFZ)
+  if (matchesDomainSet(parsed.hostname, ALLOWLIST_DOMAINS)) {
     return false;
   }
 
-  if (matchesBlockedDomain(parsed.hostname)) {
+  // Never block DRM license or auth/OAuth URLs
+  if (ALLOWLIST_PATH_RE.test(parsed.pathname) || ALLOWLIST_PATH_RE.test(parsed.search)) {
+    return false;
+  }
+
+  // O(1) blocked hostname fast path
+  if (matchesDomainSet(parsed.hostname, BLOCKED_DOMAINS)) {
     return true;
+  }
+
+  // Fast pre-check before running URL path regexes
+  const lowerPath = parsed.pathname.toLowerCase();
+  const lowerSearch = parsed.search.toLowerCase();
+  if (
+    !lowerPath.includes('ad') &&
+    !lowerPath.includes('track') &&
+    !lowerPath.includes('log_event') &&
+    !lowerPath.includes('events') &&
+    !lowerPath.includes('pixel') &&
+    !lowerPath.includes('midroll') &&
+    !lowerSearch.includes('adformat=')
+  ) {
+    return false;
   }
 
   return BLOCKED_URL_PATTERNS.some((re) => re.test(rawUrl));

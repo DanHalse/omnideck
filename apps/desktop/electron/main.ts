@@ -17,6 +17,7 @@ import {
   buildServiceSearchUrl,
   deleteCustomWorkspace,
   getVisibleServices,
+  mergePowerUpsConfig,
   moveServiceById,
   parseImportedConfig,
   pinFavorite,
@@ -38,6 +39,7 @@ import {
   type CustomServiceInput,
   type DesktopSnapshot,
   type DrmStatus,
+  type PowerUpsConfig,
   type ServiceDefinition,
   type WindowBounds,
 } from '@omnideck/shared';
@@ -52,6 +54,29 @@ if (process.platform === 'linux') {
   app.commandLine.appendSwitch('ozone-platform-hint', 'auto');
 }
 
+// Read hardwareVideoAcceleration preference early (must run before app.whenReady())
+function readEarlyHwAccelPreference(): boolean {
+  try {
+    const cfgPath = path.join(app.getPath('userData'), 'omnideck-config.json');
+    if (!fs.existsSync(cfgPath)) return true;
+    const raw = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as {
+      settings?: { hardwareVideoAcceleration?: boolean };
+    };
+    return raw?.settings?.hardwareVideoAcceleration !== false;
+  } catch {
+    return true;
+  }
+}
+
+if (readEarlyHwAccelPreference()) {
+  if (process.platform === 'linux') {
+    app.commandLine.appendSwitch('enable-features', 'VaapiVideoDecoder,VaapiIgnoreDriverChecks');
+    app.commandLine.appendSwitch('ignore-gpu-blocklist');
+  }
+} else {
+  app.disableHardwareAcceleration();
+}
+
 interface EcsComponentsApi {
   whenReady: () => Promise<void>;
   status?: () => Record<string, { version?: string; status?: string }>;
@@ -63,8 +88,10 @@ let store: ConfigStore | null = null;
 let viewManager: ViewManager | null = null;
 let updateManager: UpdateManager | null = null;
 let forceQuitting = false;
+let audibleFlushedOnQuit = false;
 let mediaKeysRegistered = false;
 let registeredSummonShortcut: string | null = null;
+let registeredLikeShortcut: string | null = null;
 let saveBoundsTimer: ReturnType<typeof setTimeout> | null = null;
 
 async function initializeWidevineCdm(): Promise<DrmStatus> {
@@ -180,6 +207,31 @@ function syncGlobalSummonShortcut(accelerator: string): void {
     }
   } catch (err) {
     console.warn('[OmniDeck] Could not register global summon shortcut:', err);
+  }
+}
+
+function syncGlobalLikeShortcut(accelerator: string): void {
+  if (registeredLikeShortcut) {
+    try {
+      globalShortcut.unregister(registeredLikeShortcut);
+    } catch {
+      // ignore
+    }
+    registeredLikeShortcut = null;
+  }
+
+  const trimmed = accelerator.trim();
+  if (!trimmed) return;
+
+  try {
+    const ok = globalShortcut.register(trimmed, () => {
+      void viewManager?.runMediaAction('like-track');
+    });
+    if (ok) {
+      registeredLikeShortcut = trimmed;
+    }
+  } catch (err) {
+    console.warn('[OmniDeck] Could not register global like shortcut:', err);
   }
 }
 
@@ -604,6 +656,10 @@ function registerIpcHandlers(): void {
     viewManager?.hibernateService(serviceId),
   );
   ipcMain.handle('omnideck:hibernate-inactive', () => viewManager?.hibernateInactive());
+  ipcMain.handle('omnideck:hibernate-heavy', (_e, thresholdMb?: number) =>
+    viewManager?.hibernateHeavyTabs(typeof thresholdMb === 'number' ? thresholdMb : 350),
+  );
+  ipcMain.handle('omnideck:refresh-memory', () => viewManager?.refreshMemoryMetrics());
   ipcMain.handle('omnideck:wake', (_e, serviceId: string) => viewManager?.wakeService(serviceId));
   ipcMain.handle('omnideck:open-external', (_e, serviceId: string) =>
     viewManager?.openExternal(serviceId),
@@ -647,7 +703,7 @@ function registerIpcHandlers(): void {
     return viewManager.syncConfig(updated);
   });
 
-  // Unified Media, Smart Audio, Sleep Timer & PiP
+  // Unified Media, Smart Audio, Sleep Timer, Audible Dock & PiP
   ipcMain.handle('omnideck:media-play-pause', (_e, serviceId?: string) =>
     viewManager?.runMediaAction('play-pause', serviceId),
   );
@@ -657,6 +713,9 @@ function registerIpcHandlers(): void {
   ipcMain.handle('omnideck:media-previous', async (_e, serviceId?: string) => {
     await viewManager?.runMediaAction('previous', serviceId);
   });
+  ipcMain.handle('omnideck:media-like', (_e, serviceId?: string) =>
+    viewManager?.runMediaAction('like-track', serviceId),
+  );
   ipcMain.handle('omnideck:resume-auto-paused', () => viewManager?.resumeAutoPaused());
   ipcMain.handle('omnideck:set-sleep-timer', (_e, minutes: number) =>
     viewManager?.setSleepTimer(minutes),
@@ -665,6 +724,7 @@ function registerIpcHandlers(): void {
     await viewManager?.runMediaAction('pip', serviceId);
   });
   ipcMain.handle('omnideck:toggle-always-on-top', () => viewManager?.toggleAlwaysOnTop());
+  ipcMain.handle('omnideck:close-audible-dock', () => viewManager?.closeAudibleDock());
 
   // Native Frameless Window Controls
   ipcMain.handle('omnideck:window-minimize', () => {
@@ -731,13 +791,16 @@ function registerIpcHandlers(): void {
     return viewManager.syncConfig(updated);
   });
 
-  // Settings & Services
+  // Settings, Power-Ups & Services
   ipcMain.handle('omnideck:update-settings', (_e, patch: Partial<AppSettings>) => {
     if (!store || !viewManager) return null;
     const current = store.get();
-    const nextSettings = {
+    const nextSettings: AppSettings = {
       ...current.settings,
       ...patch,
+      powerUps: patch.powerUps
+        ? mergePowerUpsConfig({ ...current.settings.powerUps, ...patch.powerUps })
+        : current.settings.powerUps,
     };
     const updated = store.set({
       ...current,
@@ -745,8 +808,24 @@ function registerIpcHandlers(): void {
     });
     syncHardwareMediaKeys(nextSettings.hardwareMediaKeys);
     syncGlobalSummonShortcut(nextSettings.globalSummonShortcut);
+    syncGlobalLikeShortcut(nextSettings.powerUps.spotifyLikeShortcut);
     syncLaunchAtLogin(nextSettings.launchAtLogin);
     updateManager?.startSchedule(nextSettings.autoCheckUpdates);
+    return viewManager.syncConfig(updated);
+  });
+
+  ipcMain.handle('omnideck:update-power-ups', (_e, patch: Partial<PowerUpsConfig>) => {
+    if (!store || !viewManager) return null;
+    const current = store.get();
+    const nextPowerUps = mergePowerUpsConfig({ ...current.settings.powerUps, ...patch });
+    const updated = store.set({
+      ...current,
+      settings: {
+        ...current.settings,
+        powerUps: nextPowerUps,
+      },
+    });
+    syncGlobalLikeShortcut(nextPowerUps.spotifyLikeShortcut);
     return viewManager.syncConfig(updated);
   });
 
@@ -816,6 +895,7 @@ function registerIpcHandlers(): void {
     const updated = store.reset();
     syncHardwareMediaKeys(updated.settings.hardwareMediaKeys);
     syncGlobalSummonShortcut(updated.settings.globalSummonShortcut);
+    syncGlobalLikeShortcut(updated.settings.powerUps.spotifyLikeShortcut);
     return viewManager.syncConfig(updated);
   });
 
@@ -850,6 +930,7 @@ function registerIpcHandlers(): void {
       const updated = store.set(parsed);
       syncHardwareMediaKeys(updated.settings.hardwareMediaKeys);
       syncGlobalSummonShortcut(updated.settings.globalSummonShortcut);
+      syncGlobalLikeShortcut(updated.settings.powerUps.spotifyLikeShortcut);
       const snapshot = viewManager.syncConfig(updated);
       return { imported: true, snapshot };
     } catch (err) {
@@ -871,6 +952,7 @@ function registerIpcHandlers(): void {
     const updated = store.set(parsed);
     syncHardwareMediaKeys(updated.settings.hardwareMediaKeys);
     syncGlobalSummonShortcut(updated.settings.globalSummonShortcut);
+    syncGlobalLikeShortcut(updated.settings.powerUps.spotifyLikeShortcut);
     return viewManager.syncConfig(updated);
   });
 
@@ -934,6 +1016,7 @@ async function createMainWindow(drmStatus: DrmStatus): Promise<void> {
 
   syncHardwareMediaKeys(initialConfig.settings.hardwareMediaKeys);
   syncGlobalSummonShortcut(initialConfig.settings.globalSummonShortcut);
+  syncGlobalLikeShortcut(initialConfig.settings.powerUps.spotifyLikeShortcut);
   syncLaunchAtLogin(initialConfig.settings.launchAtLogin);
   updateManager.startSchedule(initialConfig.settings.autoCheckUpdates);
 
@@ -1008,11 +1091,24 @@ if (!gotSingleInstanceLock) {
   app.on('will-quit', () => {
     syncHardwareMediaKeys(false);
     syncGlobalSummonShortcut('');
+    syncGlobalLikeShortcut('');
     updateManager?.stopSchedule();
   });
 
-  app.on('before-quit', () => {
+  app.on('before-quit', (event) => {
     forceQuitting = true;
+    const shouldFlushAudible =
+      !audibleFlushedOnQuit &&
+      store?.get().settings.powerUps.audibleWhisperSyncFlush &&
+      Boolean(viewManager?.getSnapshot().runtime.audible?.audible);
+
+    if (shouldFlushAudible && viewManager) {
+      event.preventDefault();
+      audibleFlushedOnQuit = true;
+      void viewManager.flushAudibleSync().finally(() => {
+        app.quit();
+      });
+    }
   });
 
   app.on('window-all-closed', () => {

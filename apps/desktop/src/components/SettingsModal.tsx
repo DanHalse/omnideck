@@ -1,24 +1,35 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import type {
   AppSettings,
   DrmStatus,
+  PowerUpsConfig,
   ServiceDefinition,
+  ServiceRuntimeState,
   UpdateState,
   WorkspacePreset,
 } from '@omnideck/shared';
 import { CloseIcon, DownloadCloudIcon, TrashIcon } from './Icons';
 import { ServiceIcon } from './ServiceIcon';
 
+type SettingsTab = 'general' | 'powerups' | 'performance' | 'workspaces';
+
 interface SettingsModalProps {
   settings: AppSettings;
   services: ServiceDefinition[];
+  runtime: Record<string, ServiceRuntimeState>;
   workspaces: WorkspacePreset[];
   activeWorkspaceId: string;
   drm: DrmStatus;
   update: UpdateState;
   totalBlockedRequests: number;
+  totalMemoryMb: number;
   onClose: () => void;
   onUpdateSettings: (patch: Partial<AppSettings>) => Promise<void>;
+  onUpdatePowerUps: (patch: Partial<PowerUpsConfig>) => Promise<void>;
+  onRefreshMemory: () => Promise<void>;
+  onHibernateService: (serviceId: string) => Promise<void>;
+  onHibernateInactive: () => Promise<void>;
+  onHibernateHeavyTabs: () => Promise<void>;
   onClearSession: (serviceId: string) => Promise<void>;
   onResetDefaults: () => Promise<void>;
   onApplyWorkspace: (workspaceId: string) => Promise<void>;
@@ -43,13 +54,20 @@ const HIBERNATE_OPTIONS = [
 export function SettingsModal({
   settings,
   services,
+  runtime,
   workspaces,
   activeWorkspaceId,
   drm,
   update,
   totalBlockedRequests,
+  totalMemoryMb,
   onClose,
   onUpdateSettings,
+  onUpdatePowerUps,
+  onRefreshMemory,
+  onHibernateService,
+  onHibernateInactive,
+  onHibernateHeavyTabs,
   onClearSession,
   onResetDefaults,
   onApplyWorkspace,
@@ -63,11 +81,24 @@ export function SettingsModal({
   onCopySyncJson,
   onImportSyncJson,
 }: SettingsModalProps) {
+  const [tab, setTab] = useState<SettingsTab>('general');
   const [clearedId, setClearedId] = useState<string | null>(null);
   const [workspaceName, setWorkspaceName] = useState('');
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [pasteJsonOpen, setPasteJsonOpen] = useState(false);
   const [pasteJsonValue, setPasteJsonValue] = useState('');
+
+  const pu = settings.powerUps;
+
+  // Refresh live per-service RAM metrics whenever Performance tab is open
+  useEffect(() => {
+    if (tab !== 'performance') return;
+    void onRefreshMemory();
+    const timer = setInterval(() => {
+      void onRefreshMemory();
+    }, 6000);
+    return () => clearInterval(timer);
+  }, [tab, onRefreshMemory]);
 
   const handleClear = async (id: string) => {
     await onClearSession(id);
@@ -114,6 +145,33 @@ export function SettingsModal({
     }
   };
 
+  const renderToggleRow = (
+    title: string,
+    desc: string,
+    checked: boolean,
+    onToggle: () => void,
+  ) => (
+    <div className="setting-row">
+      <div>
+        <div className="setting-row__title">{title}</div>
+        <div className="setting-row__desc">{desc}</div>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        className={`toggle ${checked ? 'toggle--on' : ''}`}
+        onClick={onToggle}
+      />
+    </div>
+  );
+
+  const mountedCount = services.filter((s) => runtime[s.id]?.mounted).length;
+  const maxSvcMb = Math.max(
+    250,
+    ...services.map((s) => runtime[s.id]?.memoryMb ?? 0),
+  );
+
   return (
     <div
       className="modal-backdrop"
@@ -125,598 +183,802 @@ export function SettingsModal({
       }}
     >
       <div className="modal">
-        <div className="modal__header">
-          <div>
-            <h2 id="settings-title" className="modal__title">
-              OmniDeck Settings
-            </h2>
-            <p className="modal__subtitle">
-              Version {update.currentVersion} • Auto-updates, media switching, ad shield, workspaces &amp; sync.
-            </p>
+        <div className="modal__header" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+            <div>
+              <h2 id="settings-title" className="modal__title">
+                OmniDeck Settings
+              </h2>
+              <p className="modal__subtitle">
+                Version {update.currentVersion} • Power-Ups, RAM &amp; GPU performance, workspaces &amp; self-updates.
+              </p>
+            </div>
+            <button type="button" className="icon-btn" aria-label="Close" onClick={onClose}>
+              <CloseIcon />
+            </button>
           </div>
-          <button type="button" className="icon-btn" aria-label="Close" onClick={onClose}>
-            <CloseIcon />
-          </button>
+
+          <div className="segmented" role="tablist" aria-label="Settings sections" style={{ width: '100%' }}>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'general'}
+              className={`segmented__btn ${tab === 'general' ? 'segmented__btn--active' : ''}`}
+              style={{ flex: 1 }}
+              onClick={() => setTab('general')}
+            >
+              General
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'powerups'}
+              className={`segmented__btn ${tab === 'powerups' ? 'segmented__btn--active' : ''}`}
+              style={{ flex: 1 }}
+              onClick={() => setTab('powerups')}
+            >
+              Power-Ups
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'performance'}
+              className={`segmented__btn ${tab === 'performance' ? 'segmented__btn--active' : ''}`}
+              style={{ flex: 1 }}
+              onClick={() => setTab('performance')}
+            >
+              Performance &amp; RAM
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'workspaces'}
+              className={`segmented__btn ${tab === 'workspaces' ? 'segmented__btn--active' : ''}`}
+              style={{ flex: 1 }}
+              onClick={() => setTab('workspaces')}
+            >
+              Workspaces &amp; Sync
+            </button>
+          </div>
         </div>
 
         <div className="modal__body">
-          {/* Self-Updater Section */}
-          <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <h3 className="section-label">Automatic Self-Updates</h3>
-            <div
-              className={`drm-banner ${
-                update.phase === 'downloaded' || update.phase === 'up-to-date'
-                  ? 'drm-banner--ready'
-                  : update.phase === 'error'
-                    ? 'drm-banner--warn'
-                    : ''
-              }`}
-              style={{ justifyContent: 'space-between', alignItems: 'center' }}
-            >
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-                <span className="drm-banner__dot" />
-                <div>
-                  <div className="setting-row__title">
-                    OmniDeck v{update.currentVersion}
-                    {update.canAutoInstall ? ' (In-Place Auto-Update)' : ' (GitHub Release Notifier)'}
+          {tab === 'general' && (
+            <>
+              {/* Self-Updater Section */}
+              <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <h3 className="section-label">Automatic Self-Updates</h3>
+                <div
+                  className={`drm-banner ${
+                    update.phase === 'downloaded' || update.phase === 'up-to-date'
+                      ? 'drm-banner--ready'
+                      : update.phase === 'error'
+                        ? 'drm-banner--warn'
+                        : ''
+                  }`}
+                  style={{ justifyContent: 'space-between', alignItems: 'center' }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                    <span className="drm-banner__dot" />
+                    <div>
+                      <div className="setting-row__title">
+                        OmniDeck v{update.currentVersion}
+                        {update.canAutoInstall ? ' (In-Place Auto-Update)' : ' (GitHub Release Notifier)'}
+                      </div>
+                      <div className="setting-row__desc">{update.message}</div>
+                    </div>
                   </div>
-                  <div className="setting-row__desc">{update.message}</div>
-                </div>
-              </div>
 
-              <div className="control-group" style={{ flexShrink: 0 }}>
-                {update.phase === 'downloaded' ? (
-                  <button
-                    type="button"
-                    className="pill-btn pill-btn--primary"
-                    onClick={() => void onInstallUpdate()}
-                  >
-                    <DownloadCloudIcon size={12} />
-                    <span>Restart &amp; Install</span>
-                  </button>
-                ) : update.phase === 'available' ? (
-                  <button
-                    type="button"
-                    className="pill-btn pill-btn--primary"
-                    onClick={() => void onOpenReleasePage()}
-                  >
-                    <DownloadCloudIcon size={12} />
-                    <span>Download v{update.availableVersion}</span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="pill-btn"
-                    disabled={update.phase === 'checking' || update.phase === 'downloading'}
-                    onClick={() => void onCheckForUpdates()}
-                  >
-                    {update.phase === 'checking'
-                      ? 'Checking…'
-                      : update.phase === 'downloading'
-                        ? `${update.progressPercent ?? 0}%`
-                        : 'Check Now'}
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div className="setting-row">
-              <div>
-                <div className="setting-row__title">Check &amp; Download Updates Automatically</div>
-                <div className="setting-row__desc">
-                  Downloads new releases from GitHub in the background without logging you out.
-                </div>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={settings.autoCheckUpdates}
-                className={`toggle ${settings.autoCheckUpdates ? 'toggle--on' : ''}`}
-                onClick={() =>
-                  void onUpdateSettings({ autoCheckUpdates: !settings.autoCheckUpdates })
-                }
-              />
-            </div>
-          </section>
-
-          {/* Widevine DRM Engine */}
-          <section>
-            <h3 className="section-label">Widevine DRM Engine</h3>
-            <div className={`drm-banner ${drm.widevineReady ? 'drm-banner--ready' : 'drm-banner--warn'}`}>
-              <span className="drm-banner__dot" />
-              <div>
-                <div className="setting-row__title">
-                  {drm.widevineReady ? 'DRM Playback Ready' : 'DRM Requires Castlabs ECS'}
-                  {drm.widevineVersion ? ` • ${drm.widevineVersion}` : ''}
-                </div>
-                <div className="setting-row__desc">{drm.message}</div>
-              </div>
-            </div>
-          </section>
-
-          {/* Appearance & Navigation */}
-          <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <h3 className="section-label">Appearance &amp; Navigation</h3>
-
-            <div className="setting-row">
-              <div>
-                <div className="setting-row__title">Navigation Bar Position</div>
-                <div className="setting-row__desc">
-                  Choose a horizontal Top Menu Bar or a vertical Left Sidebar Rail.
-                </div>
-              </div>
-              <div className="segmented" role="group" aria-label="Navigation bar position">
-                <button
-                  type="button"
-                  id="opt-nav-top"
-                  className={`segmented__btn ${settings.navPosition === 'top' ? 'segmented__btn--active' : ''}`}
-                  onClick={() => void onUpdateSettings({ navPosition: 'top' })}
-                >
-                  Top Bar
-                </button>
-                <button
-                  type="button"
-                  id="opt-nav-left"
-                  className={`segmented__btn ${settings.navPosition === 'left' ? 'segmented__btn--active' : ''}`}
-                  onClick={() => void onUpdateSettings({ navPosition: 'left' })}
-                >
-                  Left Rail
-                </button>
-              </div>
-            </div>
-
-            <div className="setting-row">
-              <div>
-                <div className="setting-row__title">App Chrome Style</div>
-                <div className="setting-row__desc">
-                  <strong>Zen App</strong> hides the browser URL/nav bar for a pure native feel (toggle anytime with <code>Ctrl+B</code>).
-                </div>
-              </div>
-              <div className="segmented" role="group" aria-label="App chrome style">
-                <button
-                  type="button"
-                  className={`segmented__btn ${settings.appChromeMode === 'zen' ? 'segmented__btn--active' : ''}`}
-                  onClick={() => void onUpdateSettings({ appChromeMode: 'zen' })}
-                >
-                  Zen App
-                </button>
-                <button
-                  type="button"
-                  className={`segmented__btn ${settings.appChromeMode === 'classic' ? 'segmented__btn--active' : ''}`}
-                  onClick={() => void onUpdateSettings({ appChromeMode: 'classic' })}
-                >
-                  Classic Bar
-                </button>
-              </div>
-            </div>
-
-            <div className="setting-row">
-              <div>
-                <div className="setting-row__title">Per-Service Native Polish</div>
-                <div className="setting-row__desc">
-                  Unifies slim scrollbars and hides "Get Desktop App" / "Open in App" nag banners across Spotify, Reddit, YouTube, Twitch &amp; Audible.
-                </div>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={settings.nativePolishCss}
-                className={`toggle ${settings.nativePolishCss ? 'toggle--on' : ''}`}
-                onClick={() =>
-                  void onUpdateSettings({ nativePolishCss: !settings.nativePolishCss })
-                }
-              />
-            </div>
-
-            <div className="setting-row">
-              <div>
-                <div className="setting-row__title">Smart Cross-App Link Routing</div>
-                <div className="setting-row__desc">
-                  Clicking a YouTube, Spotify, or Twitch link inside Reddit automatically opens it in its own OmniDeck tab.
-                </div>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={settings.smartLinkRouting}
-                className={`toggle ${settings.smartLinkRouting ? 'toggle--on' : ''}`}
-                onClick={() =>
-                  void onUpdateSettings({ smartLinkRouting: !settings.smartLinkRouting })
-                }
-              />
-            </div>
-
-            <div className="setting-row">
-              <div>
-                <div className="setting-row__title">Minimize to System Tray on Close</div>
-                <div className="setting-row__desc">
-                  Closing the window keeps Spotify &amp; Audible running quietly in the tray (summon anytime with <code>{settings.globalSummonShortcut}</code>).
-                </div>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={settings.minimizeToTrayOnClose}
-                className={`toggle ${settings.minimizeToTrayOnClose ? 'toggle--on' : ''}`}
-                onClick={() =>
-                  void onUpdateSettings({
-                    minimizeToTrayOnClose: !settings.minimizeToTrayOnClose,
-                  })
-                }
-              />
-            </div>
-
-            <div className="setting-row">
-              <div>
-                <div className="setting-row__title">Restore Last Visited Pages on Launch</div>
-                <div className="setting-row__desc">
-                  Reopens each service right back to the video, stream, subreddit, or audiobook you left off on.
-                </div>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={settings.restoreLastPages}
-                className={`toggle ${settings.restoreLastPages ? 'toggle--on' : ''}`}
-                onClick={() =>
-                  void onUpdateSettings({ restoreLastPages: !settings.restoreLastPages })
-                }
-              />
-            </div>
-
-            <div className="setting-row">
-              <div>
-                <div className="setting-row__title">Launch OmniDeck at OS Login</div>
-                <div className="setting-row__desc">
-                  Start OmniDeck automatically when you sign in to Windows or Linux.
-                </div>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={settings.launchAtLogin}
-                className={`toggle ${settings.launchAtLogin ? 'toggle--on' : ''}`}
-                onClick={() =>
-                  void onUpdateSettings({ launchAtLogin: !settings.launchAtLogin })
-                }
-              />
-            </div>
-
-            <div className="setting-row">
-              <div>
-                <div className="setting-row__title">Shell Theme</div>
-                <div className="setting-row__desc">Applies to OmniDeck chrome and modals.</div>
-              </div>
-              <div className="segmented" role="group" aria-label="Theme">
-                <button
-                  type="button"
-                  id="opt-theme-dark"
-                  className={`segmented__btn ${settings.theme === 'dark' ? 'segmented__btn--active' : ''}`}
-                  onClick={() => void onUpdateSettings({ theme: 'dark' })}
-                >
-                  Dark
-                </button>
-                <button
-                  type="button"
-                  id="opt-theme-light"
-                  className={`segmented__btn ${settings.theme === 'light' ? 'segmented__btn--active' : ''}`}
-                  onClick={() => void onUpdateSettings({ theme: 'light' })}
-                >
-                  Light
-                </button>
-              </div>
-            </div>
-          </section>
-
-          {/* Media, Audio Intelligence & Shield */}
-          <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <h3 className="section-label">Media, Audio &amp; Privacy Shield</h3>
-
-            <div className="setting-row">
-              <div>
-                <div className="setting-row__title">Smart Audio Switching</div>
-                <div className="setting-row__desc">
-                  Automatically pauses Spotify, Audible, or YT Music when you play a YouTube video or Twitch stream.
-                </div>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={settings.smartAudioSwitching}
-                className={`toggle ${settings.smartAudioSwitching ? 'toggle--on' : ''}`}
-                onClick={() =>
-                  void onUpdateSettings({ smartAudioSwitching: !settings.smartAudioSwitching })
-                }
-              />
-            </div>
-
-            <div className="setting-row">
-              <div>
-                <div className="setting-row__title">Hardware Media Keys</div>
-                <div className="setting-row__desc">
-                  Bind keyboard &amp; headset Play/Pause, Next, and Previous buttons to Now Playing.
-                </div>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={settings.hardwareMediaKeys}
-                className={`toggle ${settings.hardwareMediaKeys ? 'toggle--on' : ''}`}
-                onClick={() =>
-                  void onUpdateSettings({ hardwareMediaKeys: !settings.hardwareMediaKeys })
-                }
-              />
-            </div>
-
-            <div className="setting-row">
-              <div>
-                <div className="setting-row__title">
-                  Built-in Ad &amp; Tracker Shield ({totalBlockedRequests} blocked this session)
-                </div>
-                <div className="setting-row__desc">
-                  Network-level ad &amp; telemetry blocker engineered to preserve OAuth logins and Widevine DRM.
-                </div>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={settings.adBlockerEnabled}
-                className={`toggle ${settings.adBlockerEnabled ? 'toggle--on' : ''}`}
-                onClick={() =>
-                  void onUpdateSettings({ adBlockerEnabled: !settings.adBlockerEnabled })
-                }
-              />
-            </div>
-
-            <div className="setting-row">
-              <div>
-                <div className="setting-row__title">Do Not Disturb</div>
-                <div className="setting-row__desc">
-                  Suppresses web push notifications and hides unread badge counts in the menu bar.
-                </div>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={settings.doNotDisturb}
-                className={`toggle ${settings.doNotDisturb ? 'toggle--on' : ''}`}
-                onClick={() => void onUpdateSettings({ doNotDisturb: !settings.doNotDisturb })}
-              />
-            </div>
-
-            <div className="setting-row">
-              <div>
-                <div className="setting-row__title">Share Google Login (YouTube &amp; YT Music)</div>
-                <div className="setting-row__desc">
-                  Uses one persistent <code>persist:google</code> session so signing into YouTube
-                  automatically authenticates YouTube Music too.
-                </div>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={settings.shareGoogleSession}
-                className={`toggle ${settings.shareGoogleSession ? 'toggle--on' : ''}`}
-                onClick={() =>
-                  void onUpdateSettings({ shareGoogleSession: !settings.shareGoogleSession })
-                }
-              />
-            </div>
-
-            <div className="setting-row">
-              <div>
-                <div className="setting-row__title">Background Audio Playback</div>
-                <div className="setting-row__desc">
-                  Keep Spotify, Audible, YouTube, YouTube Music, and Twitch playing when switched
-                  to another app.
-                </div>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={settings.backgroundAudioEnabled}
-                className={`toggle ${settings.backgroundAudioEnabled ? 'toggle--on' : ''}`}
-                onClick={() =>
-                  void onUpdateSettings({
-                    backgroundAudioEnabled: !settings.backgroundAudioEnabled,
-                  })
-                }
-              />
-            </div>
-
-            <div className="setting-row">
-              <div>
-                <div className="setting-row__title">Auto-Sleep Idle Silent Tabs</div>
-                <div className="setting-row__desc">
-                  Automatically frees RAM from unused background tabs. Never sleeps tabs playing audio.
-                </div>
-              </div>
-              <div className="segmented" role="group" aria-label="Auto-sleep timeout">
-                {HIBERNATE_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    className={`segmented__btn ${settings.autoHibernateMinutes === opt.value ? 'segmented__btn--active' : ''}`}
-                    onClick={() => void onUpdateSettings({ autoHibernateMinutes: opt.value })}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </section>
-
-          {/* Workspaces */}
-          <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <h3 className="section-label">Workspaces &amp; Layout Presets</h3>
-            <div className="service-list">
-              {workspaces.map((ws) => (
-                <div key={ws.id} className="service-row">
-                  <div className="service-row__info">
-                    <span className="service-row__name">
-                      <span>{ws.name}</span>
-                      {ws.id === activeWorkspaceId && <span className="meta-chip">Active</span>}
-                      {ws.splitEnabled && <span className="meta-chip">Split</span>}
-                    </span>
-                  </div>
-                  <div className="control-group">
-                    <button
-                      type="button"
-                      className="pill-btn"
-                      onClick={() => void onApplyWorkspace(ws.id)}
-                    >
-                      Switch
-                    </button>
-                    {!ws.builtIn && (
+                  <div className="control-group" style={{ flexShrink: 0 }}>
+                    {update.phase === 'downloaded' ? (
                       <button
                         type="button"
-                        className="icon-btn icon-btn--sm icon-btn--danger"
-                        title={`Delete ${ws.name}`}
-                        onClick={() => void onDeleteWorkspace(ws.id)}
+                        className="pill-btn pill-btn--primary"
+                        onClick={() => void onInstallUpdate()}
                       >
-                        <TrashIcon />
+                        <DownloadCloudIcon size={12} />
+                        <span>Restart &amp; Install</span>
+                      </button>
+                    ) : update.phase === 'available' ? (
+                      <button
+                        type="button"
+                        className="pill-btn pill-btn--primary"
+                        onClick={() => void onOpenReleasePage()}
+                      >
+                        <DownloadCloudIcon size={12} />
+                        <span>Download v{update.availableVersion}</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="pill-btn"
+                        disabled={update.phase === 'checking' || update.phase === 'downloading'}
+                        onClick={() => void onCheckForUpdates()}
+                      >
+                        {update.phase === 'checking'
+                          ? 'Checking…'
+                          : update.phase === 'downloading'
+                            ? `${update.progressPercent ?? 0}%`
+                            : 'Check Now'}
                       </button>
                     )}
                   </div>
                 </div>
-              ))}
-            </div>
-            <form onSubmit={handleCreateWorkspace} style={{ display: 'flex', gap: 8 }}>
-              <input
-                type="text"
-                className="field__input"
-                style={{ flex: 1 }}
-                placeholder="Save current visible apps & split layout as workspace…"
-                value={workspaceName}
-                onChange={(e) => setWorkspaceName(e.target.value)}
-              />
-              <button type="submit" className="pill-btn pill-btn--primary">
-                Save Preset
-              </button>
-            </form>
-          </section>
 
-          {/* Cross-Device Config Sync */}
-          <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <h3 className="section-label">Cross-Device Sync (Windows ↔ Linux ↔ Android)</h3>
-            <div className="setting-row" style={{ flexWrap: 'wrap' }}>
-              <div>
-                <div className="setting-row__title">Portable Configuration Backup</div>
-                <div className="setting-row__desc">
-                  Transfers custom apps, tab order, workspaces, and settings without touching passwords or cookies.
-                </div>
-              </div>
-              <div className="control-group" style={{ gap: 6 }}>
-                <button type="button" className="pill-btn" onClick={() => void handleExportFile()}>
-                  Export File
-                </button>
-                <button type="button" className="pill-btn" onClick={() => void handleImportFile()}>
-                  Import File
-                </button>
-                <button type="button" className="pill-btn" onClick={() => void handleCopyJson()}>
-                  Copy Sync JSON
-                </button>
-                <button
-                  type="button"
-                  className="pill-btn"
-                  onClick={() => setPasteJsonOpen((v) => !v)}
-                >
-                  Paste JSON
-                </button>
-              </div>
-            </div>
+                {renderToggleRow(
+                  'Check & Download Updates Automatically',
+                  'Downloads new releases from GitHub in the background without logging you out.',
+                  settings.autoCheckUpdates,
+                  () => void onUpdateSettings({ autoCheckUpdates: !settings.autoCheckUpdates }),
+                )}
+              </section>
 
-            {pasteJsonOpen && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <textarea
-                  className="field__textarea"
-                  rows={4}
-                  placeholder="Paste OmniDeck sync JSON copied from Android or another PC…"
-                  value={pasteJsonValue}
-                  onChange={(e) => setPasteJsonValue(e.target.value)}
-                />
-                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <button
-                    type="button"
-                    className="pill-btn pill-btn--primary"
-                    onClick={() => void handlePasteImport()}
-                  >
-                    Apply Sync JSON
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {syncMessage && <div className="setting-row__desc">{syncMessage}</div>}
-          </section>
-
-          {/* Clear Cookies */}
-          <section>
-            <h3 className="section-label">Clear Persistent Session / Sign Out</h3>
-            <div className="service-list">
-              {services.map((svc) => (
-                <div key={svc.id} className="service-row">
-                  <div className="service-row__info">
-                    <ServiceIcon icon={svc.icon} size={16} color={svc.accentColor} />
-                    <span className="service-row__name">{svc.name}</span>
+              {/* Widevine DRM Engine */}
+              <section>
+                <h3 className="section-label">Widevine DRM Engine</h3>
+                <div className={`drm-banner ${drm.widevineReady ? 'drm-banner--ready' : 'drm-banner--warn'}`}>
+                  <span className="drm-banner__dot" />
+                  <div>
+                    <div className="setting-row__title">
+                      {drm.widevineReady ? 'DRM Playback Ready' : 'DRM Requires Castlabs ECS'}
+                      {drm.widevineVersion ? ` • ${drm.widevineVersion}` : ''}
+                    </div>
+                    <div className="setting-row__desc">{drm.message}</div>
                   </div>
-                  <button
-                    type="button"
-                    className="pill-btn"
-                    onClick={() => void handleClear(svc.id)}
-                  >
-                    {clearedId === svc.id ? 'Session Cleared' : 'Clear Cookies'}
-                  </button>
                 </div>
-              ))}
-            </div>
-          </section>
+              </section>
 
-          <section>
-            <h3 className="section-label">Keyboard Shortcuts</h3>
-            <div className="kbd-grid">
-              <div className="kbd-item">
-                <span>Command &amp; Search Palette</span>
-                <kbd>Ctrl + K</kbd>
-              </div>
-              <div className="kbd-item">
-                <span>OmniDeck Home Hub</span>
-                <kbd>Ctrl + 0</kbd>
-              </div>
-              <div className="kbd-item">
-                <span>Audio Mixer &amp; Sleep Timer</span>
-                <kbd>Ctrl + Shift + V</kbd>
-              </div>
-              <div className="kbd-item">
-                <span>Toggle Browser Tools Bar</span>
-                <kbd>Ctrl + B</kbd>
-              </div>
-              <div className="kbd-item">
-                <span>Summon / Hide Globally</span>
-                <kbd>{settings.globalSummonShortcut}</kbd>
-              </div>
-              <div className="kbd-item">
-                <span>Switch to App 1–9</span>
-                <kbd>Ctrl + 1–9</kbd>
-              </div>
-              <div className="kbd-item">
-                <span>Play / Pause Now Playing</span>
-                <kbd>Ctrl + Shift + Space</kbd>
-              </div>
-              <div className="kbd-item">
-                <span>Toggle Split View</span>
-                <kbd>Ctrl + \</kbd>
-              </div>
-              <div className="kbd-item">
-                <span>Picture-in-Picture Video</span>
-                <kbd>Ctrl + Shift + P</kbd>
-              </div>
-              <div className="kbd-item">
-                <span>Pin Always on Top</span>
-                <kbd>Ctrl + Shift + T</kbd>
-              </div>
-            </div>
-          </section>
+              {/* Appearance & Navigation */}
+              <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <h3 className="section-label">Appearance &amp; Navigation</h3>
+
+                <div className="setting-row">
+                  <div>
+                    <div className="setting-row__title">Navigation Bar Position</div>
+                    <div className="setting-row__desc">
+                      Choose a horizontal Top Menu Bar or a vertical Left Sidebar Rail.
+                    </div>
+                  </div>
+                  <div className="segmented" role="group" aria-label="Navigation bar position">
+                    <button
+                      type="button"
+                      id="opt-nav-top"
+                      className={`segmented__btn ${settings.navPosition === 'top' ? 'segmented__btn--active' : ''}`}
+                      onClick={() => void onUpdateSettings({ navPosition: 'top' })}
+                    >
+                      Top Bar
+                    </button>
+                    <button
+                      type="button"
+                      id="opt-nav-left"
+                      className={`segmented__btn ${settings.navPosition === 'left' ? 'segmented__btn--active' : ''}`}
+                      onClick={() => void onUpdateSettings({ navPosition: 'left' })}
+                    >
+                      Left Rail
+                    </button>
+                  </div>
+                </div>
+
+                <div className="setting-row">
+                  <div>
+                    <div className="setting-row__title">App Chrome Style</div>
+                    <div className="setting-row__desc">
+                      <strong>Zen App</strong> hides the browser URL/nav bar for a pure native feel (toggle anytime with <code>Ctrl+B</code>).
+                    </div>
+                  </div>
+                  <div className="segmented" role="group" aria-label="App chrome style">
+                    <button
+                      type="button"
+                      className={`segmented__btn ${settings.appChromeMode === 'zen' ? 'segmented__btn--active' : ''}`}
+                      onClick={() => void onUpdateSettings({ appChromeMode: 'zen' })}
+                    >
+                      Zen App
+                    </button>
+                    <button
+                      type="button"
+                      className={`segmented__btn ${settings.appChromeMode === 'classic' ? 'segmented__btn--active' : ''}`}
+                      onClick={() => void onUpdateSettings({ appChromeMode: 'classic' })}
+                    >
+                      Classic Bar
+                    </button>
+                  </div>
+                </div>
+
+                {renderToggleRow(
+                  'Per-Service Native Polish',
+                  'Unifies slim scrollbars and hides "Get Desktop App" / "Open in App" nag banners.',
+                  settings.nativePolishCss,
+                  () => void onUpdateSettings({ nativePolishCss: !settings.nativePolishCss }),
+                )}
+
+                {renderToggleRow(
+                  'Smart Cross-App Link Routing',
+                  'Clicking a YouTube, Spotify, or Twitch link inside Reddit opens it straight in its OmniDeck tab.',
+                  settings.smartLinkRouting,
+                  () => void onUpdateSettings({ smartLinkRouting: !settings.smartLinkRouting }),
+                )}
+
+                {renderToggleRow(
+                  'Minimize to System Tray on Close',
+                  `Keeps Spotify & Audible playing quietly in the tray (summon anytime with ${settings.globalSummonShortcut}).`,
+                  settings.minimizeToTrayOnClose,
+                  () => void onUpdateSettings({ minimizeToTrayOnClose: !settings.minimizeToTrayOnClose }),
+                )}
+
+                {renderToggleRow(
+                  'Restore Last Visited Pages on Launch',
+                  'Reopens each service right back to the video, stream, subreddit, or audiobook you left off on.',
+                  settings.restoreLastPages,
+                  () => void onUpdateSettings({ restoreLastPages: !settings.restoreLastPages }),
+                )}
+
+                {renderToggleRow(
+                  'Launch OmniDeck at OS Login',
+                  'Start OmniDeck automatically when you sign in to Windows or Linux.',
+                  settings.launchAtLogin,
+                  () => void onUpdateSettings({ launchAtLogin: !settings.launchAtLogin }),
+                )}
+
+                <div className="setting-row">
+                  <div>
+                    <div className="setting-row__title">Shell Theme</div>
+                    <div className="setting-row__desc">Applies to OmniDeck chrome and modals.</div>
+                  </div>
+                  <div className="segmented" role="group" aria-label="Theme">
+                    <button
+                      type="button"
+                      id="opt-theme-dark"
+                      className={`segmented__btn ${settings.theme === 'dark' ? 'segmented__btn--active' : ''}`}
+                      onClick={() => void onUpdateSettings({ theme: 'dark' })}
+                    >
+                      Dark
+                    </button>
+                    <button
+                      type="button"
+                      id="opt-theme-light"
+                      className={`segmented__btn ${settings.theme === 'light' ? 'segmented__btn--active' : ''}`}
+                      onClick={() => void onUpdateSettings({ theme: 'light' })}
+                    >
+                      Light
+                    </button>
+                  </div>
+                </div>
+              </section>
+
+              {/* Media, Audio Intelligence & Shield */}
+              <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <h3 className="section-label">Media, Audio &amp; Privacy Shield</h3>
+
+                {renderToggleRow(
+                  'Smart Audio Switching',
+                  'Automatically pauses Spotify, Audible, or YT Music when you play a YouTube video or Twitch stream.',
+                  settings.smartAudioSwitching,
+                  () => void onUpdateSettings({ smartAudioSwitching: !settings.smartAudioSwitching }),
+                )}
+
+                {renderToggleRow(
+                  'Hardware Media Keys',
+                  'Bind keyboard & headset Play/Pause, Next, Previous (±30s on Audible) to Now Playing.',
+                  settings.hardwareMediaKeys,
+                  () => void onUpdateSettings({ hardwareMediaKeys: !settings.hardwareMediaKeys }),
+                )}
+
+                {renderToggleRow(
+                  `Built-in Ad & Tracker Shield (${totalBlockedRequests} blocked this session)`,
+                  'O(1) network-level ad & telemetry blocker engineered to preserve OAuth logins, Widevine DRM & Power-Up APIs.',
+                  settings.adBlockerEnabled,
+                  () => void onUpdateSettings({ adBlockerEnabled: !settings.adBlockerEnabled }),
+                )}
+
+                {renderToggleRow(
+                  'Do Not Disturb',
+                  'Suppresses web push notifications and hides unread badge counts in the menu bar.',
+                  settings.doNotDisturb,
+                  () => void onUpdateSettings({ doNotDisturb: !settings.doNotDisturb }),
+                )}
+
+                {renderToggleRow(
+                  'Share Google Login (YouTube & YT Music)',
+                  'Uses one persistent persist:google session so signing into YouTube authenticates YouTube Music too.',
+                  settings.shareGoogleSession,
+                  () => void onUpdateSettings({ shareGoogleSession: !settings.shareGoogleSession }),
+                )}
+              </section>
+
+              <section>
+                <h3 className="section-label">Keyboard Shortcuts</h3>
+                <div className="kbd-grid">
+                  <div className="kbd-item">
+                    <span>Command &amp; Power-Ups Palette</span>
+                    <kbd>Ctrl + K</kbd>
+                  </div>
+                  <div className="kbd-item">
+                    <span>OmniDeck Home Hub</span>
+                    <kbd>Ctrl + 0</kbd>
+                  </div>
+                  <div className="kbd-item">
+                    <span>Audio Mixer &amp; Sleep Timer</span>
+                    <kbd>Ctrl + Shift + V</kbd>
+                  </div>
+                  <div className="kbd-item">
+                    <span>Like / Heart Playing Track</span>
+                    <kbd>{pu.spotifyLikeShortcut}</kbd>
+                  </div>
+                  <div className="kbd-item">
+                    <span>Summon / Hide Globally</span>
+                    <kbd>{settings.globalSummonShortcut}</kbd>
+                  </div>
+                  <div className="kbd-item">
+                    <span>Toggle Browser Tools Bar</span>
+                    <kbd>Ctrl + B</kbd>
+                  </div>
+                  <div className="kbd-item">
+                    <span>Switch to App 1–9</span>
+                    <kbd>Ctrl + 1–9</kbd>
+                  </div>
+                  <div className="kbd-item">
+                    <span>Play / Pause Now Playing</span>
+                    <kbd>Ctrl + Shift + Space</kbd>
+                  </div>
+                  <div className="kbd-item">
+                    <span>Toggle Split View</span>
+                    <kbd>Ctrl + \</kbd>
+                  </div>
+                  <div className="kbd-item">
+                    <span>Picture-in-Picture Video</span>
+                    <kbd>Ctrl + Shift + P</kbd>
+                  </div>
+                </div>
+              </section>
+            </>
+          )}
+
+          {tab === 'powerups' && (
+            <>
+              {/* YouTube & YouTube Music */}
+              <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <h3 className="section-label">YouTube &amp; YouTube Music</h3>
+                {renderToggleRow(
+                  'SponsorBlock Auto-Skipper',
+                  'Skips sponsor reads, intros/outros & music-video non-music segments via k-anonymity API with an in-player Undo button.',
+                  pu.youtubeSponsorBlock,
+                  () => void onUpdatePowerUps({ youtubeSponsorBlock: !pu.youtubeSponsorBlock }),
+                )}
+                {renderToggleRow(
+                  'Hide YouTube Shorts & Convert /shorts/',
+                  'Removes Shorts shelves from Home/Search and opens /shorts/ links in the full desktop video player.',
+                  pu.youtubeHideShorts,
+                  () => void onUpdatePowerUps({ youtubeHideShorts: !pu.youtubeHideShorts }),
+                )}
+                {renderToggleRow(
+                  'Auto-Dismiss "Are You Still Listening?"',
+                  'Automatically dismisses idle confirmation popups so background playlists never silently stop.',
+                  pu.youtubeAutoDismissStillListening,
+                  () =>
+                    void onUpdatePowerUps({
+                      youtubeAutoDismissStillListening: !pu.youtubeAutoDismissStillListening,
+                    }),
+                )}
+                {renderToggleRow(
+                  'Remember Preferred Playback Speed',
+                  'Remembers your YouTube playback speed (e.g. 1.25x / 1.5x) automatically across videos.',
+                  pu.youtubeRememberSpeedQuality,
+                  () =>
+                    void onUpdatePowerUps({
+                      youtubeRememberSpeedQuality: !pu.youtubeRememberSpeedQuality,
+                    }),
+                )}
+              </section>
+
+              {/* Twitch */}
+              <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <h3 className="section-label">Twitch</h3>
+                {renderToggleRow(
+                  'Built-in 7TV, BetterTTV & FrankerFaceZ Emotes',
+                  'Renders global and channel third-party static & animated emotes directly inside Twitch chat.',
+                  pu.twitchThirdPartyEmotes,
+                  () => void onUpdatePowerUps({ twitchThirdPartyEmotes: !pu.twitchThirdPartyEmotes }),
+                )}
+                {renderToggleRow(
+                  'Auto-Claim Channel Points Bonus Chest',
+                  'Automatically clicks the +50 Channel Points bonus chest whenever it appears in chat.',
+                  pu.twitchAutoClaimPoints,
+                  () => void onUpdatePowerUps({ twitchAutoClaimPoints: !pu.twitchAutoClaimPoints }),
+                )}
+                {renderToggleRow(
+                  'Pause Fast Chat on Hover',
+                  'Freezes scrolling chat while your mouse hovers over messages so you can read effortlessly.',
+                  pu.twitchPauseChatOnHover,
+                  () => void onUpdatePowerUps({ twitchPauseChatOnHover: !pu.twitchPauseChatOnHover }),
+                )}
+                {renderToggleRow(
+                  'Auto Theater Mode',
+                  'Automatically expands Twitch channels to Theater Mode for maximum stream canvas.',
+                  pu.twitchAutoTheater,
+                  () => void onUpdatePowerUps({ twitchAutoTheater: !pu.twitchAutoTheater }),
+                )}
+              </section>
+
+              {/* Audible */}
+              <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <h3 className="section-label">Audible Desktop Suite</h3>
+                {renderToggleRow(
+                  'Direct-to-Library Launch',
+                  'Skips the Audible storefront and opens straight to your /library/titles collection.',
+                  pu.audibleDirectToLibrary,
+                  () => void onUpdatePowerUps({ audibleDirectToLibrary: !pu.audibleDirectToLibrary }),
+                )}
+                {renderToggleRow(
+                  'Dock Cloud Player Inside OmniDeck',
+                  'Opens Audible Listen Now side-by-side with your Library instead of spawning a stray popup window.',
+                  pu.audibleDockCloudPlayer,
+                  () => void onUpdatePowerUps({ audibleDockCloudPlayer: !pu.audibleDockCloudPlayer }),
+                )}
+                {renderToggleRow(
+                  'Fade-Out Sleep Timer + 15s Auto-Rewind on Resume',
+                  'Gently fades volume over the final 10 seconds of a sleep timer and rewinds 15s when you press Play again.',
+                  pu.audibleFadeSleepAndRewind,
+                  () =>
+                    void onUpdatePowerUps({
+                      audibleFadeSleepAndRewind: !pu.audibleFadeSleepAndRewind,
+                    }),
+                )}
+                {renderToggleRow(
+                  'Smart WhisperSync Flush on Close / Sleep',
+                  'Pauses playback briefly before closing or sleeping Audible so Amazon saves your exact listening timestamp.',
+                  pu.audibleWhisperSyncFlush,
+                  () =>
+                    void onUpdatePowerUps({
+                      audibleWhisperSyncFlush: !pu.audibleWhisperSyncFlush,
+                    }),
+                )}
+              </section>
+
+              {/* Reddit */}
+              <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <h3 className="section-label">Reddit (RES-Lite)</h3>
+                {renderToggleRow(
+                  'Compact Desktop Density',
+                  'Tightens card spacing and widens the desktop feed layout on Modern Reddit.',
+                  pu.redditCompactDensity,
+                  () => void onUpdatePowerUps({ redditCompactDensity: !pu.redditCompactDensity }),
+                )}
+                {renderToggleRow(
+                  'Use Classic Old Reddit (old.reddit.com)',
+                  '1-click switch to redirect Reddit browsing to classic high-density old.reddit.com.',
+                  pu.redditUseOldReddit,
+                  () => void onUpdatePowerUps({ redditUseOldReddit: !pu.redditUseOldReddit }),
+                )}
+                {renderToggleRow(
+                  'RES-Lite Keyboard Navigation (J / K / X / C)',
+                  'Press J/K to jump between posts, X to expand media, and C to open comments (disabled while typing).',
+                  pu.redditKeyboardNav,
+                  () => void onUpdatePowerUps({ redditKeyboardNav: !pu.redditKeyboardNav }),
+                )}
+                {renderToggleRow(
+                  'Auto-Collapse AutoModerator Comments',
+                  'Automatically collapses pinned AutoModerator boilerplate at the top of threads.',
+                  pu.redditCollapseAutoMod,
+                  () => void onUpdatePowerUps({ redditCollapseAutoMod: !pu.redditCollapseAutoMod }),
+                )}
+                {renderToggleRow(
+                  'Hide Promoted Posts',
+                  'Removes sponsored/promoted cards from Reddit feeds.',
+                  pu.redditHidePromoted,
+                  () => void onUpdatePowerUps({ redditHidePromoted: !pu.redditHidePromoted }),
+                )}
+              </section>
+
+              {/* Spotify */}
+              <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <h3 className="section-label">Spotify</h3>
+                {renderToggleRow(
+                  'Keep Spotify Connect Alive',
+                  'Exempts Spotify from idle auto-hibernation so phone/speaker Spotify Connect stays connected.',
+                  pu.spotifyKeepConnectAlive,
+                  () => void onUpdatePowerUps({ spotifyKeepConnectAlive: !pu.spotifyKeepConnectAlive }),
+                )}
+                <div className="setting-row">
+                  <div>
+                    <div className="setting-row__title">Global "Like / Heart Track" Hotkey</div>
+                    <div className="setting-row__desc">
+                      Press <code>{pu.spotifyLikeShortcut}</code> from any app or game to save the playing Spotify or YT Music track.
+                    </div>
+                  </div>
+                  <span className="meta-chip">{pu.spotifyLikeShortcut}</span>
+                </div>
+              </section>
+            </>
+          )}
+
+          {tab === 'performance' && (
+            <>
+              <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                  <div>
+                    <h3 className="section-label" style={{ marginBottom: 2 }}>
+                      Live Memory &amp; Process Monitor
+                    </h3>
+                    <div className="setting-row__desc">
+                      Total OmniDeck footprint: <strong>{totalMemoryMb} MB</strong> across {mountedCount} active{' '}
+                      {mountedCount === 1 ? 'tab' : 'tabs'} (includes Chromium GPU + shell).
+                    </div>
+                  </div>
+                  <div className="control-group" style={{ gap: 6 }}>
+                    <button
+                      type="button"
+                      className="pill-btn"
+                      onClick={() => void onRefreshMemory()}
+                    >
+                      Refresh
+                    </button>
+                    <button
+                      type="button"
+                      className="pill-btn pill-btn--primary"
+                      onClick={() => void onHibernateHeavyTabs()}
+                    >
+                      Sleep Heavy (&gt;350 MB)
+                    </button>
+                    <button
+                      type="button"
+                      className="pill-btn"
+                      onClick={() => void onHibernateInactive()}
+                    >
+                      Sleep All Idle
+                    </button>
+                  </div>
+                </div>
+
+                <div className="service-list">
+                  {services.map((svc) => {
+                    const rt = runtime[svc.id];
+                    const mb = rt?.memoryMb ?? 0;
+                    const pct = Math.min(100, Math.round((mb / maxSvcMb) * 100));
+                    const statusLabel = !rt?.mounted
+                      ? rt?.hibernated
+                        ? 'Sleeping (0 MB)'
+                        : 'Not loaded'
+                      : rt.audible
+                        ? 'Playing Audio'
+                        : rt.softThrottled
+                          ? 'Throttled (Tier-1)'
+                          : 'Active';
+
+                    return (
+                      <div key={svc.id} className="service-row" style={{ gap: 12 }}>
+                        <div className="service-row__info" style={{ minWidth: 165 }}>
+                          <ServiceIcon icon={svc.icon} size={16} color={svc.accentColor} />
+                          <div>
+                            <div className="service-row__name">{svc.name}</div>
+                            <div className="setting-row__desc" style={{ fontSize: 11 }}>
+                              {statusLabel}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <div
+                            style={{
+                              flex: 1,
+                              height: 7,
+                              borderRadius: 999,
+                              background: 'rgba(148, 163, 184, 0.16)',
+                              overflow: 'hidden',
+                            }}
+                          >
+                            <div
+                              style={{
+                                width: `${pct}%`,
+                                height: '100%',
+                                borderRadius: 999,
+                                background: mb >= 350 ? '#EF4444' : svc.accentColor,
+                                transition: 'width 200ms ease',
+                              }}
+                            />
+                          </div>
+                          <span
+                            style={{
+                              minWidth: 58,
+                              textAlign: 'right',
+                              fontSize: 12,
+                              fontWeight: 600,
+                              fontVariantNumeric: 'tabular-nums',
+                            }}
+                          >
+                            {mb > 0 ? `${mb} MB` : '—'}
+                          </span>
+                        </div>
+
+                        <button
+                          type="button"
+                          className="pill-btn"
+                          disabled={!rt?.mounted || rt.audible}
+                          onClick={() => void onHibernateService(svc.id)}
+                        >
+                          Sleep
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+
+              <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <h3 className="section-label">2-Tier Smart Hibernation &amp; GPU Acceleration</h3>
+
+                {renderToggleRow(
+                  'Hardware Video Acceleration (GPU / Linux VA-API)',
+                  'Offloads 4K YouTube & 1080p60 Twitch decoding to your GPU for lower CPU & cooler fans (restart required on change).',
+                  settings.hardwareVideoAcceleration,
+                  () =>
+                    void onUpdateSettings({
+                      hardwareVideoAcceleration: !settings.hardwareVideoAcceleration,
+                    }),
+                )}
+
+                {renderToggleRow(
+                  'Background Audio Playback',
+                  'Keep Spotify, Audible, YouTube, YouTube Music, and Twitch unthrottled while playing audio in the background.',
+                  settings.backgroundAudioEnabled,
+                  () =>
+                    void onUpdateSettings({
+                      backgroundAudioEnabled: !settings.backgroundAudioEnabled,
+                    }),
+                )}
+
+                <div className="setting-row">
+                  <div>
+                    <div className="setting-row__title">Auto-Sleep Idle Silent Tabs (Lossless)</div>
+                    <div className="setting-row__desc">
+                      Tier-1 soft-throttles at 5 min; Tier-2 snapshots scroll position &amp; video timestamp before freeing RAM. Never sleeps playing audio.
+                    </div>
+                  </div>
+                  <div className="segmented" role="group" aria-label="Auto-sleep timeout">
+                    {HIBERNATE_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        className={`segmented__btn ${settings.autoHibernateMinutes === opt.value ? 'segmented__btn--active' : ''}`}
+                        onClick={() => void onUpdateSettings({ autoHibernateMinutes: opt.value })}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </section>
+            </>
+          )}
+
+          {tab === 'workspaces' && (
+            <>
+              {/* Workspaces */}
+              <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <h3 className="section-label">Workspaces &amp; Layout Presets</h3>
+                <div className="service-list">
+                  {workspaces.map((ws) => (
+                    <div key={ws.id} className="service-row">
+                      <div className="service-row__info">
+                        <span className="service-row__name">
+                          <span>{ws.name}</span>
+                          {ws.id === activeWorkspaceId && <span className="meta-chip">Active</span>}
+                          {ws.splitEnabled && <span className="meta-chip">Split</span>}
+                        </span>
+                      </div>
+                      <div className="control-group">
+                        <button
+                          type="button"
+                          className="pill-btn"
+                          onClick={() => void onApplyWorkspace(ws.id)}
+                        >
+                          Switch
+                        </button>
+                        {!ws.builtIn && (
+                          <button
+                            type="button"
+                            className="icon-btn icon-btn--sm icon-btn--danger"
+                            title={`Delete ${ws.name}`}
+                            onClick={() => void onDeleteWorkspace(ws.id)}
+                          >
+                            <TrashIcon />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <form onSubmit={handleCreateWorkspace} style={{ display: 'flex', gap: 8 }}>
+                  <input
+                    type="text"
+                    className="field__input"
+                    style={{ flex: 1 }}
+                    placeholder="Save current visible apps & split layout as workspace…"
+                    value={workspaceName}
+                    onChange={(e) => setWorkspaceName(e.target.value)}
+                  />
+                  <button type="submit" className="pill-btn pill-btn--primary">
+                    Save Preset
+                  </button>
+                </form>
+              </section>
+
+              {/* Cross-Device Config Sync */}
+              <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <h3 className="section-label">Cross-Device Sync (Windows ↔ Linux ↔ Android)</h3>
+                <div className="setting-row" style={{ flexWrap: 'wrap' }}>
+                  <div>
+                    <div className="setting-row__title">Portable Configuration Backup</div>
+                    <div className="setting-row__desc">
+                      Transfers custom apps, Power-Ups, tab order, workspaces, and settings without touching passwords or cookies.
+                    </div>
+                  </div>
+                  <div className="control-group" style={{ gap: 6 }}>
+                    <button type="button" className="pill-btn" onClick={() => void handleExportFile()}>
+                      Export File
+                    </button>
+                    <button type="button" className="pill-btn" onClick={() => void handleImportFile()}>
+                      Import File
+                    </button>
+                    <button type="button" className="pill-btn" onClick={() => void handleCopyJson()}>
+                      Copy Sync JSON
+                    </button>
+                    <button
+                      type="button"
+                      className="pill-btn"
+                      onClick={() => setPasteJsonOpen((v) => !v)}
+                    >
+                      Paste JSON
+                    </button>
+                  </div>
+                </div>
+
+                {pasteJsonOpen && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <textarea
+                      className="field__textarea"
+                      rows={4}
+                      placeholder="Paste OmniDeck sync JSON copied from Android or another PC…"
+                      value={pasteJsonValue}
+                      onChange={(e) => setPasteJsonValue(e.target.value)}
+                    />
+                    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                      <button
+                        type="button"
+                        className="pill-btn pill-btn--primary"
+                        onClick={() => void handlePasteImport()}
+                      >
+                        Apply Sync JSON
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {syncMessage && <div className="setting-row__desc">{syncMessage}</div>}
+              </section>
+
+              {/* Clear Cookies */}
+              <section>
+                <h3 className="section-label">Clear Persistent Session / Sign Out</h3>
+                <div className="service-list">
+                  {services.map((svc) => (
+                    <div key={svc.id} className="service-row">
+                      <div className="service-row__info">
+                        <ServiceIcon icon={svc.icon} size={16} color={svc.accentColor} />
+                        <span className="service-row__name">{svc.name}</span>
+                      </div>
+                      <button
+                        type="button"
+                        className="pill-btn"
+                        onClick={() => void handleClear(svc.id)}
+                      >
+                        {clearedId === svc.id ? 'Session Cleared' : 'Clear Cookies'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </>
+          )}
         </div>
 
         <div className="modal__footer">

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   PinnedFavorite,
+  PowerUpsConfig,
   RecentActivityItem,
   ServiceDefinition,
   WorkspacePreset,
@@ -26,6 +27,8 @@ interface CommandPaletteProps {
   workspaces: WorkspacePreset[];
   pinnedFavorites: PinnedFavorite[];
   recentActivity: RecentActivityItem[];
+  powerUps: PowerUpsConfig;
+  audibleDockOpen: boolean;
   onClose: () => void;
   onOpenHome: () => void;
   onSelectService: (serviceId: string) => void;
@@ -38,9 +41,13 @@ interface CommandPaletteProps {
   onToggleNavPosition: () => void;
   onToggleAlwaysOnTop: () => void;
   onTriggerPip: () => void;
+  onLikeCurrentTrack: () => void;
+  onCloseAudibleDock: () => void;
   onOpenMixer: () => void;
   onSetSleepTimer: (minutes: number) => void;
   onHibernateInactive: () => void;
+  onHibernateHeavyTabs: () => void;
+  onTogglePowerUp: (key: keyof PowerUpsConfig) => void;
   onOpenManageApps: () => void;
   onOpenSettings: () => void;
   onCheckUpdates: () => void;
@@ -53,6 +60,8 @@ export function CommandPalette({
   workspaces,
   pinnedFavorites,
   recentActivity,
+  powerUps,
+  audibleDockOpen,
   onClose,
   onOpenHome,
   onSelectService,
@@ -65,9 +74,13 @@ export function CommandPalette({
   onToggleNavPosition,
   onToggleAlwaysOnTop,
   onTriggerPip,
+  onLikeCurrentTrack,
+  onCloseAudibleDock,
   onOpenMixer,
   onSetSleepTimer,
   onHibernateInactive,
+  onHibernateHeavyTabs,
+  onTogglePowerUp,
   onOpenManageApps,
   onOpenSettings,
   onCheckUpdates,
@@ -182,6 +195,27 @@ export function CommandPalette({
         run: onPinCurrent,
       },
       {
+        id: 'cmd-like-track',
+        group: 'Actions',
+        title: 'Like / Heart Currently Playing Track',
+        subtitle: 'Works on Spotify, YouTube Music & YouTube',
+        shortcut: powerUps.spotifyLikeShortcut,
+        run: onLikeCurrentTrack,
+      },
+      ...(audibleDockOpen
+        ? [
+            {
+              id: 'cmd-close-audible-dock',
+              group: 'Actions',
+              title: 'Close Docked Audible Cloud Player',
+              subtitle: 'Flushes WhisperSync & returns Library to full width',
+              icon: 'audible' as const,
+              accentColor: '#F7991C',
+              run: onCloseAudibleDock,
+            },
+          ]
+        : []),
+      {
         id: 'cmd-mixer',
         group: 'Actions',
         title: 'Open Audio Mixer & Sleep Timer',
@@ -193,7 +227,7 @@ export function CommandPalette({
         id: 'cmd-sleep-30',
         group: 'Actions',
         title: 'Set 30-Minute Sleep Timer',
-        subtitle: 'Gently fades out and pauses playing media',
+        subtitle: 'Gently fades out, pauses & rewinds 15s on Audible resume',
         run: () => onSetSleepTimer(30),
       },
       {
@@ -232,6 +266,13 @@ export function CommandPalette({
         run: onToggleNavPosition,
       },
       {
+        id: 'cmd-sleep-heavy',
+        group: 'Actions',
+        title: 'Sleep Heavy Idle Tabs (>350 MB RAM)',
+        subtitle: 'Preserves scroll position & video timestamp on wake',
+        run: onHibernateHeavyTabs,
+      },
+      {
         id: 'cmd-sleep-idle',
         group: 'Actions',
         title: 'Sleep All Inactive Silent Tabs (Free RAM)',
@@ -247,7 +288,7 @@ export function CommandPalette({
       {
         id: 'cmd-settings',
         group: 'Actions',
-        title: 'Open OmniDeck Settings',
+        title: 'Open OmniDeck Settings & Power-Ups',
         shortcut: 'Ctrl+,',
         run: onOpenSettings,
       },
@@ -256,6 +297,88 @@ export function CommandPalette({
         group: 'Actions',
         title: 'Check for OmniDeck Updates',
         run: onCheckUpdates,
+      },
+      // Quick Power-Up Toggles
+      {
+        id: 'pu-yt-sponsor',
+        group: 'Power-Ups',
+        title: `YouTube SponsorBlock: ${powerUps.youtubeSponsorBlock ? 'ON → Turn Off' : 'OFF → Turn On'}`,
+        subtitle: 'Auto-skip sponsors, intros & music-video non-music segments',
+        icon: 'youtube',
+        accentColor: '#FF2D2D',
+        run: () => onTogglePowerUp('youtubeSponsorBlock'),
+      },
+      {
+        id: 'pu-yt-shorts',
+        group: 'Power-Ups',
+        title: `Hide YouTube Shorts: ${powerUps.youtubeHideShorts ? 'ON → Turn Off' : 'OFF → Turn On'}`,
+        subtitle: 'Hide Shorts shelves & open /shorts/ in the full video player',
+        icon: 'youtube',
+        accentColor: '#FF2D2D',
+        run: () => onTogglePowerUp('youtubeHideShorts'),
+      },
+      {
+        id: 'pu-tw-emotes',
+        group: 'Power-Ups',
+        title: `Twitch 7TV/BTTV/FFZ Emotes: ${powerUps.twitchThirdPartyEmotes ? 'ON → Turn Off' : 'OFF → Turn On'}`,
+        subtitle: 'Render global & channel third-party emotes in Twitch chat',
+        icon: 'twitch',
+        accentColor: '#9146FF',
+        run: () => onTogglePowerUp('twitchThirdPartyEmotes'),
+      },
+      {
+        id: 'pu-tw-points',
+        group: 'Power-Ups',
+        title: `Twitch Auto-Claim Channel Points: ${powerUps.twitchAutoClaimPoints ? 'ON → Turn Off' : 'OFF → Turn On'}`,
+        subtitle: 'Automatically click +50 bonus chests in Twitch chat',
+        icon: 'twitch',
+        accentColor: '#9146FF',
+        run: () => onTogglePowerUp('twitchAutoClaimPoints'),
+      },
+      {
+        id: 'pu-tw-theater',
+        group: 'Power-Ups',
+        title: `Twitch Auto Theater Mode: ${powerUps.twitchAutoTheater ? 'ON → Turn Off' : 'OFF → Turn On'}`,
+        subtitle: 'Expand Twitch streams automatically to theater layout',
+        icon: 'twitch',
+        accentColor: '#9146FF',
+        run: () => onTogglePowerUp('twitchAutoTheater'),
+      },
+      {
+        id: 'pu-rd-old',
+        group: 'Power-Ups',
+        title: `Reddit Classic (old.reddit.com): ${powerUps.redditUseOldReddit ? 'ON → Switch to Modern' : 'OFF → Switch to Old Reddit'}`,
+        subtitle: 'Toggle between Modern Reddit and Old Reddit instantly',
+        icon: 'reddit',
+        accentColor: '#FF5414',
+        run: () => onTogglePowerUp('redditUseOldReddit'),
+      },
+      {
+        id: 'pu-rd-kbd',
+        group: 'Power-Ups',
+        title: `Reddit RES-Lite Keyboard Nav (J/K/X/C): ${powerUps.redditKeyboardNav ? 'ON → Turn Off' : 'OFF → Turn On'}`,
+        subtitle: 'Navigate posts with J/K, expand with X, open comments with C',
+        icon: 'reddit',
+        accentColor: '#FF5414',
+        run: () => onTogglePowerUp('redditKeyboardNav'),
+      },
+      {
+        id: 'pu-au-dock',
+        group: 'Power-Ups',
+        title: `Audible Docked Cloud Player: ${powerUps.audibleDockCloudPlayer ? 'ON → Turn Off' : 'OFF → Turn On'}`,
+        subtitle: 'Dock Audible Cloud Player side-by-side with your Library',
+        icon: 'audible',
+        accentColor: '#F7991C',
+        run: () => onTogglePowerUp('audibleDockCloudPlayer'),
+      },
+      {
+        id: 'pu-sp-connect',
+        group: 'Power-Ups',
+        title: `Spotify Connect Keep-Alive: ${powerUps.spotifyKeepConnectAlive ? 'ON → Turn Off' : 'OFF → Turn On'}`,
+        subtitle: 'Prevent auto-sleep from disconnecting Spotify Connect',
+        icon: 'spotify',
+        accentColor: '#1ED760',
+        run: () => onTogglePowerUp('spotifyKeepConnectAlive'),
       },
     ];
 
@@ -278,6 +401,8 @@ export function CommandPalette({
     workspaces,
     pinnedFavorites,
     recentActivity,
+    powerUps,
+    audibleDockOpen,
     onOpenHome,
     onSelectService,
     onSearchInService,
@@ -289,9 +414,13 @@ export function CommandPalette({
     onToggleNavPosition,
     onToggleAlwaysOnTop,
     onTriggerPip,
+    onLikeCurrentTrack,
+    onCloseAudibleDock,
     onOpenMixer,
     onSetSleepTimer,
     onHibernateInactive,
+    onHibernateHeavyTabs,
+    onTogglePowerUp,
     onOpenManageApps,
     onOpenSettings,
     onCheckUpdates,

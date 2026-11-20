@@ -3,6 +3,7 @@ import type {
   ChromeInsets,
   CustomServiceInput,
   DesktopSnapshot,
+  PowerUpsConfig,
   ServiceDefinition,
   UpdateState,
 } from '@omnideck/shared';
@@ -27,6 +28,8 @@ export interface OmniDeckBridge {
   setZoom: (serviceId: string, zoomFactor: number) => Promise<DesktopSnapshot>;
   hibernateService: (serviceId: string) => Promise<DesktopSnapshot>;
   hibernateInactive: () => Promise<DesktopSnapshot>;
+  hibernateHeavyTabs: (thresholdMb?: number) => Promise<DesktopSnapshot>;
+  refreshMemoryMetrics: () => Promise<DesktopSnapshot>;
   wakeService: (serviceId: string) => Promise<DesktopSnapshot>;
   openExternal: (serviceId: string) => Promise<void>;
   openDevTools: (serviceId: string) => Promise<void>;
@@ -37,14 +40,16 @@ export interface OmniDeckBridge {
   removeFavorite: (favoriteId: string) => Promise<DesktopSnapshot>;
   clearRecentActivity: () => Promise<DesktopSnapshot>;
 
-  // Unified Media Controls, Smart Audio Switching, Sleep Timer & PiP
+  // Unified Media Controls, Smart Audio Switching, Sleep Timer, Audible Dock & PiP
   mediaPlayPause: (serviceId?: string) => Promise<DesktopSnapshot>;
   mediaNext: (serviceId?: string) => Promise<void>;
   mediaPrevious: (serviceId?: string) => Promise<void>;
+  mediaLikeTrack: (serviceId?: string) => Promise<DesktopSnapshot>;
   resumeAutoPaused: () => Promise<DesktopSnapshot>;
   setSleepTimer: (minutes: number) => Promise<DesktopSnapshot>;
   triggerPip: (serviceId: string) => Promise<void>;
   toggleAlwaysOnTop: () => Promise<DesktopSnapshot>;
+  closeAudibleDock: () => Promise<DesktopSnapshot>;
 
   // Native Frameless Window Controls
   windowMinimize: () => Promise<void>;
@@ -65,8 +70,9 @@ export interface OmniDeckBridge {
   saveCustomWorkspace: (name: string) => Promise<DesktopSnapshot>;
   deleteCustomWorkspace: (workspaceId: string) => Promise<DesktopSnapshot>;
 
-  // Settings, Services & Cross-Device Sync
+  // Settings, Power-Ups, Services & Cross-Device Sync
   updateSettings: (patch: Partial<AppSettings>) => Promise<DesktopSnapshot>;
+  updatePowerUps: (patch: Partial<PowerUpsConfig>) => Promise<DesktopSnapshot>;
   addCustomService: (input: CustomServiceInput) => Promise<DesktopSnapshot>;
   updateService: (
     serviceId: string,

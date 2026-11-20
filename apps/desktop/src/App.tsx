@@ -168,6 +168,8 @@ export function App() {
     alwaysOnTop,
     isMaximized,
     totalBlockedRequests,
+    totalMemoryMb,
+    audibleDockOpen,
     toastMessage,
   } = snapshot;
 
@@ -218,6 +220,7 @@ export function App() {
       secondaryServiceId={config.splitView.secondaryServiceId}
       doNotDisturb={config.settings.doNotDisturb}
       browserBarVisible={showBrowserBar}
+      audibleDockOpen={audibleDockOpen}
       isMaximized={isMaximized}
       toastMessage={toastMessage}
       update={update}
@@ -229,6 +232,7 @@ export function App() {
         void api.updateSettings({ doNotDisturb: !config.settings.doNotDisturb })
       }
       onToggleBrowserBar={handleToggleBrowserBar}
+      onCloseAudibleDock={() => void api.closeAudibleDock()}
       onPinCurrentPage={() => void api.pinCurrentPage(activeService.id)}
       onOpenCommandPalette={() => setModal('palette')}
       onOpenMixer={() => setModal('mixer')}
@@ -285,6 +289,16 @@ export function App() {
             </div>
 
             <div className="topbar__actions no-drag">
+              {audibleDockOpen && activeService.id === 'audible' && !homeActive && (
+                <button
+                  type="button"
+                  className="pill-btn"
+                  title="Close docked Audible Cloud Player & flush WhisperSync"
+                  onClick={() => void api.closeAudibleDock()}
+                >
+                  <span>Close Player</span>
+                </button>
+              )}
               <button
                 type="button"
                 className="pill-btn"
@@ -453,6 +467,8 @@ export function App() {
           workspaces={config.workspaces}
           pinnedFavorites={config.pinnedFavorites}
           recentActivity={config.recentActivity}
+          powerUps={config.settings.powerUps}
+          audibleDockOpen={audibleDockOpen}
           onClose={() => setModal('none')}
           onOpenHome={() => void api.openHome()}
           onSelectService={(id) => void api.selectService(id)}
@@ -467,9 +483,18 @@ export function App() {
           }
           onToggleAlwaysOnTop={() => void api.toggleAlwaysOnTop()}
           onTriggerPip={() => void api.triggerPip(activeService.id)}
+          onLikeCurrentTrack={() => void api.mediaLikeTrack()}
+          onCloseAudibleDock={() => void api.closeAudibleDock()}
           onOpenMixer={() => setModal('mixer')}
           onSetSleepTimer={(mins) => void api.setSleepTimer(mins)}
           onHibernateInactive={() => void api.hibernateInactive()}
+          onHibernateHeavyTabs={() => void api.hibernateHeavyTabs(350)}
+          onTogglePowerUp={(key) => {
+            const cur = config.settings.powerUps[key];
+            if (typeof cur === 'boolean') {
+              void api.updatePowerUps({ [key]: !cur });
+            }
+          }}
           onOpenManageApps={() => setModal('manage')}
           onOpenSettings={() => setModal('settings')}
           onCheckUpdates={() => void api.checkForUpdates()}
@@ -513,14 +538,31 @@ export function App() {
         <SettingsModal
           settings={config.settings}
           services={config.services}
+          runtime={runtime}
           workspaces={config.workspaces}
           activeWorkspaceId={config.activeWorkspaceId}
           drm={drm}
           update={update}
           totalBlockedRequests={totalBlockedRequests}
+          totalMemoryMb={totalMemoryMb}
           onClose={() => setModal('none')}
           onUpdateSettings={async (patch) => {
             await api.updateSettings(patch);
+          }}
+          onUpdatePowerUps={async (patch) => {
+            await api.updatePowerUps(patch);
+          }}
+          onRefreshMemory={async () => {
+            await api.refreshMemoryMetrics();
+          }}
+          onHibernateService={async (id) => {
+            await api.hibernateService(id);
+          }}
+          onHibernateInactive={async () => {
+            await api.hibernateInactive();
+          }}
+          onHibernateHeavyTabs={async () => {
+            await api.hibernateHeavyTabs(350);
           }}
           onClearSession={async (id) => {
             await api.clearServiceSession(id);

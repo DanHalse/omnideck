@@ -1,4 +1,5 @@
 import { DEFAULT_SERVICES } from './services.js';
+import { DEFAULT_POWER_UPS, mergePowerUpsConfig } from './powerUps.js';
 import type {
   AppSettings,
   ChromeInsets,
@@ -13,7 +14,7 @@ import type {
   WorkspacePreset,
 } from './types.js';
 
-export const APP_VERSION = '1.2.1';
+export const APP_VERSION = '1.3.0';
 export const GITHUB_REPO_OWNER = 'DanHalse';
 export const GITHUB_REPO_NAME = 'omnideck';
 export const GITHUB_RELEASES_URL = `https://github.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases`;
@@ -37,6 +38,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   adBlockerEnabled: true,
   doNotDisturb: false,
   autoCheckUpdates: true,
+  hardwareVideoAcceleration: true,
+  powerUps: { ...DEFAULT_POWER_UPS },
 };
 
 export const DEFAULT_WORKSPACES: WorkspacePreset[] = [
@@ -84,7 +87,7 @@ export function createDefaultConfig(): PersistedConfig {
       secondaryServiceId: 'reddit',
       ratio: 0.5,
     },
-    settings: { ...DEFAULT_SETTINGS },
+    settings: { ...DEFAULT_SETTINGS, powerUps: { ...DEFAULT_POWER_UPS } },
     workspaces: DEFAULT_WORKSPACES.map((w) => ({ ...w, serviceIds: [...w.serviceIds] })),
     activeWorkspaceId: 'all',
     pinnedFavorites: [],
@@ -250,6 +253,11 @@ export function mergePersistedConfig(raw: unknown): PersistedConfig {
       typeof candidate.settings?.autoCheckUpdates === 'boolean'
         ? candidate.settings.autoCheckUpdates
         : DEFAULT_SETTINGS.autoCheckUpdates,
+    hardwareVideoAcceleration:
+      typeof candidate.settings?.hardwareVideoAcceleration === 'boolean'
+        ? candidate.settings.hardwareVideoAcceleration
+        : DEFAULT_SETTINGS.hardwareVideoAcceleration,
+    powerUps: mergePowerUpsConfig(candidate.settings?.powerUps),
   };
 
   let services: ServiceDefinition[] = fallback.services;
@@ -1002,8 +1010,28 @@ export function moveServiceById(
 }
 
 /**
- * Determines whether a mounted background service is eligible for automatic hibernation.
- * Never hibernates visible services (primary or split-view) or services currently playing audio!
+ * Tier-1 Smart Sleep: Determines whether an inactive silent background tab should have
+ * Chromium background throttling engaged (default after 5 minutes) to cut CPU before full sleep.
+ */
+export function shouldSoftThrottle(
+  runtime: ServiceRuntimeState,
+  config: PersistedConfig,
+  nowMs: number,
+  softDelayMinutes = 5,
+): boolean {
+  if (!runtime.mounted || runtime.hibernated || runtime.softThrottled) return false;
+  if (runtime.serviceId === config.activeServiceId) return false;
+  if (config.splitView.enabled && runtime.serviceId === config.splitView.secondaryServiceId) {
+    return false;
+  }
+  if (runtime.audible) return false;
+  if (runtime.lastActiveAt <= 0) return false;
+  return nowMs - runtime.lastActiveAt >= softDelayMinutes * 60_000;
+}
+
+/**
+ * Tier-2 Smart Sleep: Determines whether a mounted background service is eligible for full hibernation.
+ * Never hibernates visible services, audio-playing services, or Spotify while Connect Keep-Alive is on.
  */
 export function shouldAutoHibernate(
   runtime: ServiceRuntimeState,
@@ -1017,6 +1045,9 @@ export function shouldAutoHibernate(
     return false;
   }
   if (runtime.audible) return false;
+  if (runtime.serviceId === 'spotify' && config.settings.powerUps.spotifyKeepConnectAlive) {
+    return false;
+  }
   if (runtime.lastActiveAt <= 0) return false;
 
   const idleMs = nowMs - runtime.lastActiveAt;

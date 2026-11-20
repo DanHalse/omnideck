@@ -17,6 +17,10 @@ describe('Ad & Tracker Shield request filter', () => {
     expect(shouldBlockNetworkRequest('https://myaccount.google.com/intro', 'xhr')).toBe(false);
     expect(shouldBlockNetworkRequest('https://apis.google.com/js/api.js', 'script')).toBe(false);
     expect(shouldBlockNetworkRequest('https://www.gstatic.com/accounts/static/botguard.js', 'script')).toBe(false);
+    expect(shouldBlockNetworkRequest('https://sponsor.ajay.app/api/skipSegments/ab12', 'xhr')).toBe(false);
+    expect(shouldBlockNetworkRequest('https://cdn.7tv.app/emote/12345/2x.webp', 'image')).toBe(false);
+    expect(shouldBlockNetworkRequest('https://cdn.betterttv.net/emote/12345/2x', 'image')).toBe(false);
+    expect(shouldBlockNetworkRequest('https://cdn.frankerfacez.com/emote/12345/2', 'image')).toBe(false);
     expect(shouldBlockNetworkRequest('https://gew1-spclient.spotify.com/widevine-license/v1/audio/license', 'xhr')).toBe(false);
     expect(shouldBlockNetworkRequest('https://www.youtube.com/watch?v=dQw4w9WgXcQ', 'mainFrame')).toBe(false);
     expect(shouldBlockNetworkRequest('https://doubleclick.net/test', 'mainFrame')).toBe(false);

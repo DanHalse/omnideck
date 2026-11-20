@@ -1,4 +1,5 @@
 import {
+  app,
   BrowserWindow,
   Menu,
   WebContentsView,
@@ -12,13 +13,17 @@ import {
   computeDesktopLayoutBounds,
   createInitialRuntimeState,
   extractBadgeCountFromTitle,
+  extractTwitchChannelLogin,
+  extractYouTubeVideoId,
   isInAppPopupUrl,
   matchServiceForUrl,
   recordRecentActivity,
   resolveElectronPartition,
+  rewriteUrlForPowerUps,
   selectActiveService,
   setServiceLastUrl,
   shouldAutoHibernate,
+  shouldSoftThrottle,
   toggleSplitView,
   type ChromeInsets,
   type DesktopSnapshot,
@@ -37,6 +42,17 @@ import {
   buildSetVolumeScript,
   READ_MEDIA_METADATA_SCRIPT,
 } from './nativePolish.js';
+import {
+  buildRedditPowerUpScript,
+  buildRestoreHibernateStateScript,
+  buildSponsorSegmentsInjector,
+  buildTwitchEmotesInjector,
+  buildTwitchPowerUpScript,
+  buildYouTubePowerUpScript,
+  CAPTURE_HIBERNATE_STATE_SCRIPT,
+  fetchSponsorSegments,
+  fetchTwitchEmotes,
+} from './powerUps.js';
 
 const ALLOWED_PERMISSIONS = new Set<string>([
   'media',
@@ -57,6 +73,11 @@ interface MediaMeta {
   artworkUrl?: string;
 }
 
+interface HibernateSnapshot {
+  scrollY: number;
+  mediaTime: number | null;
+}
+
 export function shouldPreserveNativeUserAgent(): boolean {
   // Keep Electron's honest, unmodified User-Agent so HTTP User-Agent matches Chromium's
   // Sec-CH-UA Client Hints (laundering/stripping UA tokens triggers Google /v3/signin/rejected).
@@ -71,10 +92,17 @@ export class ViewManager {
   private readonly webContentsToService = new Map<number, string>();
   private readonly runtime = new Map<string, ServiceRuntimeState>();
   private readonly mediaMeta = new Map<string, MediaMeta>();
+  private readonly hibernateSnapshots = new Map<string, HibernateSnapshot>();
+  private readonly pendingRewindServiceIds = new Set<string>();
+  private readonly lastSponsorVideoByService = new Map<string, string>();
+  private readonly lastTwitchChannel = { login: '' };
   private readonly configuredPartitions = new Set<string>();
   private readonly attachedViewIds = new Set<string>();
   private readonly onSnapshotChanged: (snapshot: DesktopSnapshot) => void;
   private readonly onConfigUpdated: (nextConfig: PersistedConfig) => void;
+
+  private audiblePlayerView: WebContentsView | null = null;
+  private audiblePlayerAttached = false;
 
   private config: PersistedConfig;
   private updateState: UpdateState;
@@ -92,6 +120,7 @@ export class ViewManager {
   private lastNowPlayingServiceId: string | null = null;
   private autoPausedServiceId: string | null = null;
   private totalBlockedRequests = 0;
+  private totalMemoryMb = 0;
   private blockCountEmitTimer: ReturnType<typeof setTimeout> | null = null;
   private toastMessage: string | null = null;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -154,6 +183,8 @@ export class ViewManager {
       alwaysOnTop: this.alwaysOnTop,
       isMaximized: !this.mainWindow.isDestroyed() && this.mainWindow.isMaximized(),
       totalBlockedRequests: this.totalBlockedRequests,
+      totalMemoryMb: this.totalMemoryMb,
+      audibleDockOpen: Boolean(this.audiblePlayerView && !this.audiblePlayerView.webContents.isDestroyed()),
       toastMessage: this.toastMessage,
     };
   }
@@ -164,7 +195,54 @@ export class ViewManager {
         return true;
       }
     }
+    if (
+      this.audiblePlayerView &&
+      !this.audiblePlayerView.webContents.isDestroyed() &&
+      this.audiblePlayerView.webContents.isCurrentlyAudible()
+    ) {
+      return true;
+    }
     return false;
+  }
+
+  /**
+   * Collects live RAM usage (MB) per mounted service process + total OmniDeck footprint.
+   */
+  refreshMemoryMetrics(): DesktopSnapshot {
+    try {
+      const metrics = app.getAppMetrics();
+      const pidToMb = new Map<number, number>();
+      let totalKb = 0;
+
+      for (const m of metrics) {
+        const kb = m.memory?.workingSetSize ?? 0;
+        totalKb += kb;
+        pidToMb.set(m.pid, Math.round(kb / 1024));
+      }
+
+      this.totalMemoryMb = Math.round(totalKb / 1024);
+
+      for (const [id, rt] of this.runtime.entries()) {
+        const view = this.views.get(id);
+        if (view && !view.webContents.isDestroyed()) {
+          const pid = view.webContents.getOSProcessId();
+          let mb = pidToMb.get(pid) ?? 0;
+          if (id === 'audible' && this.audiblePlayerView && !this.audiblePlayerView.webContents.isDestroyed()) {
+            const dockPid = this.audiblePlayerView.webContents.getOSProcessId();
+            if (dockPid !== pid) {
+              mb += pidToMb.get(dockPid) ?? 0;
+            }
+          }
+          rt.memoryMb = mb;
+        } else {
+          rt.memoryMb = 0;
+        }
+      }
+    } catch {
+      // Ignore platform metric unavailability
+    }
+
+    return this.emitSnapshot();
   }
 
   setHomeActive(active: boolean): DesktopSnapshot {
@@ -221,6 +299,7 @@ export class ViewManager {
     const prevNav = this.config.settings.navPosition;
     const prevChrome = this.config.settings.appChromeMode;
     const prevBgAudio = this.config.settings.backgroundAudioEnabled;
+    const prevPowerUps = this.config.settings.powerUps;
     this.config = nextConfig;
 
     if (prevNav !== nextConfig.settings.navPosition || prevChrome !== nextConfig.settings.appChromeMode) {
@@ -261,6 +340,40 @@ export class ViewManager {
           const keepAlive = nextConfig.settings.backgroundAudioEnabled && svc.keepAliveInBackground;
           view.webContents.setBackgroundThrottling(!keepAlive);
         }
+      }
+    }
+
+    // Re-apply Power-Ups live whenever any Power-Up toggle changed
+    if (JSON.stringify(prevPowerUps) !== JSON.stringify(nextConfig.settings.powerUps)) {
+      for (const svc of nextConfig.services) {
+        const view = this.views.get(svc.id);
+        if (view && !view.webContents.isDestroyed()) {
+          this.applyPowerUpsToView(svc, view);
+        }
+      }
+      // If user toggled Old Reddit on/off while Reddit is mounted, reload to switch host cleanly
+      if (prevPowerUps.redditUseOldReddit !== nextConfig.settings.powerUps.redditUseOldReddit) {
+        const redditView = this.views.get('reddit');
+        if (redditView && !redditView.webContents.isDestroyed()) {
+          const cur = redditView.webContents.getURL();
+          if (cur) {
+            try {
+              const parsed = new URL(cur);
+              if (parsed.hostname.includes('reddit.com')) {
+                parsed.hostname = nextConfig.settings.powerUps.redditUseOldReddit
+                  ? 'old.reddit.com'
+                  : 'www.reddit.com';
+                void redditView.webContents.loadURL(parsed.toString()).catch(() => {});
+              }
+            } catch {
+              // ignore
+            }
+          }
+        }
+      }
+      // If user disabled Audible docked player while open, close dock cleanly
+      if (!nextConfig.settings.powerUps.audibleDockCloudPlayer && this.audiblePlayerView) {
+        void this.closeAudibleDock();
       }
     }
 
@@ -324,15 +437,16 @@ export class ViewManager {
     const svc = this.findService(serviceId);
     if (!svc) return;
     this.homeActive = false;
+    const homeUrl = rewriteUrlForPowerUps(svc.id, svc.url, this.config.settings.powerUps) ?? svc.url;
     const rt = this.runtime.get(serviceId);
     if (rt?.hibernated) {
-      rt.currentUrl = svc.url;
+      rt.currentUrl = homeUrl;
       this.wakeService(serviceId);
       return;
     }
-    const view = this.ensureMounted(svc);
+    const view = this.ensureMounted(svc, homeUrl);
     if (view && !view.webContents.isDestroyed()) {
-      void view.webContents.loadURL(svc.url);
+      void view.webContents.loadURL(homeUrl);
     }
     this.relayout();
   }
@@ -347,6 +461,9 @@ export class ViewManager {
     if (view && !view.webContents.isDestroyed()) {
       view.webContents.setAudioMuted(nextMuted);
     }
+    if (serviceId === 'audible' && this.audiblePlayerView && !this.audiblePlayerView.webContents.isDestroyed()) {
+      this.audiblePlayerView.webContents.setAudioMuted(nextMuted);
+    }
     return this.emitSnapshot();
   }
 
@@ -359,6 +476,9 @@ export class ViewManager {
           view.webContents.setAudioMuted(true);
         }
       }
+    }
+    if (this.audiblePlayerView && !this.audiblePlayerView.webContents.isDestroyed()) {
+      this.audiblePlayerView.webContents.setAudioMuted(true);
     }
     return this.emitSnapshot();
   }
@@ -373,6 +493,9 @@ export class ViewManager {
         const view = this.views.get(serviceId);
         if (view && !view.webContents.isDestroyed()) {
           view.webContents.setAudioMuted(false);
+        }
+        if (serviceId === 'audible' && this.audiblePlayerView && !this.audiblePlayerView.webContents.isDestroyed()) {
+          this.audiblePlayerView.webContents.setAudioMuted(false);
         }
       }
     }
@@ -402,22 +525,30 @@ export class ViewManager {
     }
 
     if (!Number.isFinite(minutes) || minutes <= 0) {
-      this.sleepTimerState = { active: false, endsAt: null, durationMinutes: 0 };
+      // Restore volumes if cancelled mid-fade
+      if (this.sleepTimerState.fading) {
+        for (const [id, rt] of this.runtime.entries()) {
+          if (rt.mounted) this.applyVolumeToView(id, rt.volume);
+        }
+      }
+      this.sleepTimerState = { active: false, endsAt: null, durationMinutes: 0, fading: false };
       this.showToast('Sleep timer cancelled', 2000);
       return this.getSnapshot();
     }
 
     const duration = Math.min(360, Math.max(1, Math.round(minutes)));
     const endsAt = Date.now() + duration * 60_000;
-    this.sleepTimerState = { active: true, endsAt, durationMinutes: duration };
+    this.sleepTimerState = { active: true, endsAt, durationMinutes: duration, fading: false };
     this.showToast(`Sleep timer set for ${duration} min`);
 
     this.sleepTimerTick = setInterval(() => {
       if (!this.sleepTimerState.active || !this.sleepTimerState.endsAt) return;
       const remainingMs = this.sleepTimerState.endsAt - Date.now();
+      const fadeEnabled = this.config.settings.powerUps.audibleFadeSleepAndRewind;
 
-      // Gentle 10-second fade-out before pausing
-      if (remainingMs > 0 && remainingMs <= 10_000) {
+      // Gentle 10-second volume fade-out before pausing
+      if (fadeEnabled && remainingMs > 0 && remainingMs <= 10_000) {
+        this.sleepTimerState.fading = true;
         const factor = Math.max(0.05, remainingMs / 10_000);
         for (const [id, rt] of this.runtime.entries()) {
           if (rt.mounted && rt.audible) {
@@ -431,10 +562,13 @@ export class ViewManager {
           clearInterval(this.sleepTimerTick);
           this.sleepTimerTick = null;
         }
-        this.sleepTimerState = { active: false, endsAt: null, durationMinutes: 0 };
+        this.sleepTimerState = { active: false, endsAt: null, durationMinutes: 0, fading: false };
 
         for (const [id, rt] of this.runtime.entries()) {
           if (rt.mounted && rt.audible) {
+            if (fadeEnabled && id === 'audible') {
+              this.pendingRewindServiceIds.add(id);
+            }
             void this.runMediaAction('pause', id).then(() => {
               this.applyVolumeToView(id, rt.volume);
             });
@@ -449,17 +583,42 @@ export class ViewManager {
     return this.getSnapshot();
   }
 
+  private getMediaWebContents(serviceId: string): Electron.WebContents | null {
+    if (
+      serviceId === 'audible' &&
+      this.audiblePlayerView &&
+      !this.audiblePlayerView.webContents.isDestroyed()
+    ) {
+      return this.audiblePlayerView.webContents;
+    }
+    const view = this.views.get(serviceId);
+    if (view && !view.webContents.isDestroyed()) {
+      return view.webContents;
+    }
+    return null;
+  }
+
   async runMediaAction(action: MediaControlAction, explicitServiceId?: string): Promise<DesktopSnapshot> {
     const targetId = explicitServiceId ?? this.resolveMediaTargetId();
     if (!targetId) return this.getSnapshot();
 
-    const view = this.views.get(targetId);
-    if (!view || view.webContents.isDestroyed()) {
+    const wc = this.getMediaWebContents(targetId);
+    if (!wc) {
       return this.getSnapshot();
     }
 
     try {
-      await view.webContents.executeJavaScript(buildMediaControlScript(action), true);
+      // Auto-rewind 15s when resuming Audible after a Sleep Timer fade-out
+      if (
+        (action === 'play' || action === 'play-pause') &&
+        this.pendingRewindServiceIds.has(targetId)
+      ) {
+        this.pendingRewindServiceIds.delete(targetId);
+        await wc.executeJavaScript(buildMediaControlScript('rewind-15'), true);
+        this.showToast('Rewound 15s after sleep timer', 2400);
+      }
+
+      const result = await wc.executeJavaScript(buildMediaControlScript(action), true);
       if (action === 'play' || action === 'play-pause') {
         this.lastNowPlayingServiceId = targetId;
         if (this.autoPausedServiceId === targetId) {
@@ -468,6 +627,15 @@ export class ViewManager {
       }
       if (action === 'pip') {
         this.showToast('Toggled Picture-in-Picture', 2000);
+      }
+      if (action === 'like-track') {
+        const svc = this.findService(targetId);
+        this.showToast(
+          result === 'liked'
+            ? `Liked current ${svc?.shortName ?? 'track'}`
+            : `No active like button found in ${svc?.name ?? targetId}`,
+          2200,
+        );
       }
     } catch {
       // Ignore if page is mid-navigation
@@ -483,15 +651,66 @@ export class ViewManager {
     return this.runMediaAction('play', id);
   }
 
-  hibernateService(serviceId: string): DesktopSnapshot {
+  /**
+   * Smart WhisperSync Flush for Audible: pauses playback briefly before sleep or app quit
+   * so the Audible Cloud Player cleanly posts the exact playback position back to Amazon servers.
+   */
+  async flushAudibleSync(): Promise<void> {
+    if (!this.config.settings.powerUps.audibleWhisperSyncFlush) return;
+    const rt = this.runtime.get('audible');
+    const wc = this.getMediaWebContents('audible');
+    if (!wc || (!rt?.audible && !wc.isCurrentlyAudible())) return;
+
+    try {
+      await wc.executeJavaScript(buildMediaControlScript('pause'), true);
+      await new Promise<void>((resolve) => setTimeout(resolve, 1600));
+    } catch {
+      // Best-effort sync flush
+    }
+  }
+
+  async closeAudibleDock(): Promise<DesktopSnapshot> {
+    if (!this.audiblePlayerView) return this.getSnapshot();
+    await this.flushAudibleSync();
+    this.destroyAudibleDock();
+    this.relayout();
+    this.showToast('Closed docked Audible Cloud Player', 2000);
+    return this.emitSnapshot();
+  }
+
+  private async captureHibernateSnapshot(serviceId: string): Promise<void> {
+    const view = this.views.get(serviceId);
+    if (!view || view.webContents.isDestroyed()) return;
+    try {
+      const result = (await Promise.race([
+        view.webContents.executeJavaScript(CAPTURE_HIBERNATE_STATE_SCRIPT, true),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 450)),
+      ])) as HibernateSnapshot | null;
+      if (result && (result.scrollY > 0 || (result.mediaTime !== null && result.mediaTime > 2))) {
+        this.hibernateSnapshots.set(serviceId, result);
+      }
+    } catch {
+      // Ignore snapshot errors on unload
+    }
+  }
+
+  async hibernateService(serviceId: string): Promise<DesktopSnapshot> {
     const rt = this.runtime.get(serviceId);
     if (!rt) return this.getSnapshot();
+
+    if (serviceId === 'audible') {
+      await this.flushAudibleSync();
+      this.destroyAudibleDock();
+    }
+    await this.captureHibernateSnapshot(serviceId);
 
     this.destroyView(serviceId);
     rt.mounted = false;
     rt.hibernated = true;
+    rt.softThrottled = false;
     rt.loading = false;
     rt.audible = false;
+    rt.memoryMb = 0;
     rt.canGoBack = false;
     rt.canGoForward = false;
     this.mediaMeta.delete(serviceId);
@@ -510,8 +729,8 @@ export class ViewManager {
     return this.emitSnapshot();
   }
 
-  hibernateInactive(): DesktopSnapshot {
-    let count = 0;
+  async hibernateInactive(): Promise<DesktopSnapshot> {
+    const targets: string[] = [];
     for (const [id, rt] of this.runtime.entries()) {
       if (!rt.mounted || rt.hibernated || rt.audible) continue;
       if (!this.homeActive && id === this.config.activeServiceId) continue;
@@ -522,17 +741,79 @@ export class ViewManager {
       ) {
         continue;
       }
-      this.destroyView(id);
-      rt.mounted = false;
-      rt.hibernated = true;
-      rt.loading = false;
-      this.mediaMeta.delete(id);
-      count += 1;
+      targets.push(id);
     }
+
+    for (const id of targets) {
+      await this.captureHibernateSnapshot(id);
+      const rt = this.runtime.get(id);
+      if (id === 'audible') this.destroyAudibleDock();
+      this.destroyView(id);
+      if (rt) {
+        rt.mounted = false;
+        rt.hibernated = true;
+        rt.softThrottled = false;
+        rt.loading = false;
+        rt.memoryMb = 0;
+      }
+      this.mediaMeta.delete(id);
+    }
+
     this.relayout();
+    this.refreshMemoryMetrics();
     this.showToast(
-      count > 0 ? `Put ${count} inactive tab${count > 1 ? 's' : ''} to sleep` : 'No idle tabs to sleep',
+      targets.length > 0
+        ? `Put ${targets.length} inactive tab${targets.length > 1 ? 's' : ''} to sleep`
+        : 'No idle tabs to sleep',
       2200,
+    );
+    return this.getSnapshot();
+  }
+
+  /**
+   * Sleeps mounted, non-visible, silent tabs whose working-set RAM exceeds thresholdMb.
+   */
+  async hibernateHeavyTabs(thresholdMb = 350): Promise<DesktopSnapshot> {
+    this.refreshMemoryMetrics();
+    const targets: string[] = [];
+    for (const [id, rt] of this.runtime.entries()) {
+      if (!rt.mounted || rt.hibernated || rt.audible) continue;
+      if (id === 'spotify' && this.config.settings.powerUps.spotifyKeepConnectAlive) continue;
+      if (!this.homeActive && id === this.config.activeServiceId) continue;
+      if (
+        !this.homeActive &&
+        this.config.splitView.enabled &&
+        id === this.config.splitView.secondaryServiceId
+      ) {
+        continue;
+      }
+      if ((rt.memoryMb ?? 0) >= thresholdMb) {
+        targets.push(id);
+      }
+    }
+
+    for (const id of targets) {
+      await this.captureHibernateSnapshot(id);
+      const rt = this.runtime.get(id);
+      if (id === 'audible') this.destroyAudibleDock();
+      this.destroyView(id);
+      if (rt) {
+        rt.mounted = false;
+        rt.hibernated = true;
+        rt.softThrottled = false;
+        rt.loading = false;
+        rt.memoryMb = 0;
+      }
+      this.mediaMeta.delete(id);
+    }
+
+    this.relayout();
+    this.refreshMemoryMetrics();
+    this.showToast(
+      targets.length > 0
+        ? `Slept ${targets.length} heavy tab${targets.length > 1 ? 's' : ''} (>${thresholdMb} MB)`
+        : `No idle tabs above ${thresholdMb} MB`,
+      2400,
     );
     return this.getSnapshot();
   }
@@ -544,6 +825,7 @@ export class ViewManager {
 
     this.homeActive = false;
     rt.hibernated = false;
+    rt.softThrottled = false;
     rt.lastActiveAt = Date.now();
     this.ensureMounted(svc, rt.currentUrl || svc.url);
     this.relayout();
@@ -610,6 +892,7 @@ export class ViewManager {
       clearTimeout(this.toastTimer);
       this.toastTimer = null;
     }
+    this.destroyAudibleDock();
     for (const id of [...this.views.keys()]) {
       this.destroyView(id);
     }
@@ -617,10 +900,20 @@ export class ViewManager {
 
   private applyVolumeToView(serviceId: string, volume: number): void {
     const view = this.views.get(serviceId);
-    if (!view || view.webContents.isDestroyed()) return;
-    void view.webContents
-      .executeJavaScript(buildSetVolumeScript(volume), true)
-      .catch(() => {});
+    if (view && !view.webContents.isDestroyed()) {
+      void view.webContents
+        .executeJavaScript(buildSetVolumeScript(volume), true)
+        .catch(() => {});
+    }
+    if (
+      serviceId === 'audible' &&
+      this.audiblePlayerView &&
+      !this.audiblePlayerView.webContents.isDestroyed()
+    ) {
+      void this.audiblePlayerView.webContents
+        .executeJavaScript(buildSetVolumeScript(volume), true)
+        .catch(() => {});
+    }
   }
 
   private resolveMediaTargetId(): string | null {
@@ -689,10 +982,10 @@ export class ViewManager {
       if (otherId === startedServiceId) continue;
       if (!otherRt.mounted || !otherRt.audible || otherRt.muted) continue;
 
-      const otherView = this.views.get(otherId);
-      if (otherView && !otherView.webContents.isDestroyed()) {
+      const otherWc = this.getMediaWebContents(otherId);
+      if (otherWc) {
         this.autoPausedServiceId = otherId;
-        void otherView.webContents
+        void otherWc
           .executeJavaScript(buildMediaControlScript('pause'), true)
           .catch(() => {});
       }
@@ -735,9 +1028,22 @@ export class ViewManager {
       const rt = this.runtime.get(id);
       if (!svc || !rt) continue;
       rt.lastActiveAt = now;
+
+      // Wake from Tier-1 soft background throttling immediately when focused
+      if (rt.softThrottled) {
+        rt.softThrottled = false;
+        const existing = this.views.get(id);
+        if (existing && !existing.webContents.isDestroyed()) {
+          const keepAlive = this.config.settings.backgroundAudioEnabled && svc.keepAliveInBackground;
+          existing.webContents.setBackgroundThrottling(!keepAlive);
+        }
+      }
+
       if (!rt.hibernated) {
-        const restoreUrl = this.config.settings.restoreLastPages ? (svc.lastUrl || svc.url) : svc.url;
-        this.ensureMounted(svc, rt.mounted ? rt.currentUrl : restoreUrl);
+        const baseRestoreUrl = this.config.settings.restoreLastPages ? (svc.lastUrl || svc.url) : svc.url;
+        const rewritten =
+          rewriteUrlForPowerUps(svc.id, baseRestoreUrl, this.config.settings.powerUps) ?? baseRestoreUrl;
+        this.ensureMounted(svc, rt.mounted ? rt.currentUrl : rewritten);
       }
     }
   }
@@ -834,6 +1140,7 @@ export class ViewManager {
     const rt = this.runtime.get(service.id) ?? createInitialRuntimeState(service);
     rt.mounted = true;
     rt.hibernated = false;
+    rt.softThrottled = false;
     rt.loading = true;
     rt.volume = clampVolume(service.volume ?? rt.volume);
     rt.lastActiveAt = Date.now();
@@ -845,12 +1152,188 @@ export class ViewManager {
 
     this.attachWebContentsListeners(service, view);
 
-    const targetUrl = initialUrl && initialUrl.startsWith('http') ? initialUrl : service.url;
+    const baseTarget = initialUrl && initialUrl.startsWith('http') ? initialUrl : service.url;
+    const targetUrl = rewriteUrlForPowerUps(service.id, baseTarget, this.config.settings.powerUps) ?? baseTarget;
     void wc.loadURL(targetUrl).catch((err) => {
       console.warn(`[OmniDeck] Load error for ${service.id}:`, err?.message ?? err);
     });
 
     return view;
+  }
+
+  private applyPowerUpsToView(service: ServiceDefinition, view: WebContentsView): void {
+    const wc = view.webContents;
+    if (wc.isDestroyed()) return;
+    const powerUps = this.config.settings.powerUps;
+
+    if (this.config.settings.nativePolishCss) {
+      void wc
+        .insertCSS(buildNativePolishCss(service.id, this.config.settings.theme, powerUps))
+        .catch(() => {});
+    }
+
+    if (service.id === 'youtube' || service.id === 'youtube-music') {
+      void wc
+        .executeJavaScript(buildYouTubePowerUpScript(service.id, powerUps), true)
+        .catch(() => {});
+    } else if (service.id === 'twitch') {
+      void wc.executeJavaScript(buildTwitchPowerUpScript(powerUps), true).catch(() => {});
+    } else if (service.id === 'reddit') {
+      void wc.executeJavaScript(buildRedditPowerUpScript(powerUps), true).catch(() => {});
+    }
+
+    this.syncDynamicPowerUpData(service.id, wc.getURL());
+  }
+
+  private syncDynamicPowerUpData(serviceId: string, url: string): void {
+    if (!url) return;
+    const powerUps = this.config.settings.powerUps;
+    const view = this.views.get(serviceId);
+    if (!view || view.webContents.isDestroyed()) return;
+
+    // YouTube & YouTube Music SponsorBlock segments
+    if ((serviceId === 'youtube' || serviceId === 'youtube-music') && powerUps.youtubeSponsorBlock) {
+      const videoId = extractYouTubeVideoId(url);
+      if (videoId && this.lastSponsorVideoByService.get(serviceId) !== videoId) {
+        this.lastSponsorVideoByService.set(serviceId, videoId);
+        void fetchSponsorSegments(videoId, serviceId === 'youtube-music').then((segments) => {
+          const curView = this.views.get(serviceId);
+          if (!curView || curView.webContents.isDestroyed()) return;
+          if (this.lastSponsorVideoByService.get(serviceId) !== videoId) return;
+          void curView.webContents
+            .executeJavaScript(buildSponsorSegmentsInjector(videoId, segments), true)
+            .catch(() => {});
+        });
+      }
+    }
+
+    // Twitch 7TV / BTTV / FFZ emotes
+    if (serviceId === 'twitch' && powerUps.twitchThirdPartyEmotes) {
+      const login = extractTwitchChannelLogin(url);
+      if (login && this.lastTwitchChannel.login !== login) {
+        this.lastTwitchChannel.login = login;
+        void fetchTwitchEmotes(login).then((emoteMap) => {
+          const curView = this.views.get('twitch');
+          if (!curView || curView.webContents.isDestroyed()) return;
+          if (this.lastTwitchChannel.login !== login) return;
+          if (Object.keys(emoteMap).length > 0) {
+            void curView.webContents
+              .executeJavaScript(buildTwitchEmotesInjector(emoteMap), true)
+              .catch(() => {});
+          }
+        });
+      }
+    }
+  }
+
+  private openDockedAudiblePlayer(url: string, partition: string): void {
+    if (this.audiblePlayerView && !this.audiblePlayerView.webContents.isDestroyed()) {
+      void this.audiblePlayerView.webContents.loadURL(url).catch(() => {});
+      this.relayout();
+      this.emitSnapshot();
+      return;
+    }
+
+    this.configurePartition(partition);
+    const playerView = new WebContentsView({
+      webPreferences: {
+        partition,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        backgroundThrottling: false,
+        spellcheck: false,
+      },
+    });
+
+    this.audiblePlayerView = playerView;
+    const wc = playerView.webContents;
+    this.webContentsToService.set(wc.id, 'audible');
+
+    const rt = this.runtime.get('audible');
+    if (rt) {
+      wc.setAudioMuted(rt.muted);
+    }
+
+    wc.on('did-finish-load', () => {
+      if (wc.isDestroyed()) return;
+      if (this.config.settings.nativePolishCss) {
+        void wc
+          .insertCSS(buildNativePolishCss('audible', this.config.settings.theme, this.config.settings.powerUps))
+          .catch(() => {});
+      }
+      const curRt = this.runtime.get('audible');
+      if (curRt && curRt.volume < 0.99) {
+        this.applyVolumeToView('audible', curRt.volume);
+      }
+    });
+
+    wc.on('media-started-playing', () => {
+      const curRt = this.runtime.get('audible');
+      if (!curRt) return;
+      curRt.audible = true;
+      this.lastNowPlayingServiceId = 'audible';
+      if (this.autoPausedServiceId === 'audible') {
+        this.autoPausedServiceId = null;
+      }
+      this.handleSmartAudioSwitching('audible');
+      void this.pollMediaMetadata('audible');
+      this.emitSnapshot();
+    });
+
+    wc.on('media-paused', () => {
+      const curRt = this.runtime.get('audible');
+      if (!curRt || wc.isDestroyed()) return;
+      const mainView = this.views.get('audible');
+      const mainAudible = Boolean(mainView && !mainView.webContents.isDestroyed() && mainView.webContents.isCurrentlyAudible());
+      curRt.audible = wc.isCurrentlyAudible() || mainAudible;
+      this.emitSnapshot();
+    });
+
+    wc.on('page-title-updated', (_e, title) => {
+      if (title) {
+        void this.pollMediaMetadata('audible');
+      }
+    });
+
+    void wc.loadURL(url).catch(() => {});
+    this.relayout();
+    this.showToast('Audible Cloud Player docked inside OmniDeck', 2400);
+    this.emitSnapshot();
+  }
+
+  private destroyAudibleDock(): void {
+    const view = this.audiblePlayerView;
+    if (!view) return;
+    this.webContentsToService.delete(view.webContents.id);
+    if (this.audiblePlayerAttached && !this.mainWindow.isDestroyed()) {
+      try {
+        this.mainWindow.contentView.removeChildView(view);
+      } catch {
+        // ignore
+      }
+    }
+    this.audiblePlayerAttached = false;
+    if (!view.webContents.isDestroyed()) {
+      view.webContents.close({ waitForBeforeUnload: false });
+    }
+    this.audiblePlayerView = null;
+  }
+
+  private setAudibleDockAttached(shouldAttach: boolean): void {
+    const view = this.audiblePlayerView;
+    if (!view || this.mainWindow.isDestroyed()) return;
+    if (shouldAttach && !this.audiblePlayerAttached) {
+      this.mainWindow.contentView.addChildView(view);
+      this.audiblePlayerAttached = true;
+    } else if (!shouldAttach && this.audiblePlayerAttached) {
+      try {
+        this.mainWindow.contentView.removeChildView(view);
+      } catch {
+        // ignore
+      }
+      this.audiblePlayerAttached = false;
+    }
   }
 
   private attachWebContentsListeners(service: ServiceDefinition, view: WebContentsView): void {
@@ -871,6 +1354,13 @@ export class ViewManager {
       }
 
       if (url && /^https?:\/\//i.test(url)) {
+        // Apply Power-Up URL rewrites on SPA in-page transitions too (e.g. YouTube Shorts click)
+        const rewritten = rewriteUrlForPowerUps(service.id, url, this.config.settings.powerUps);
+        if (rewritten && rewritten !== url) {
+          void wc.loadURL(rewritten).catch(() => {});
+          return;
+        }
+
         let nextCfg = this.config;
         if (nextCfg.settings.restoreLastPages) {
           nextCfg = setServiceLastUrl(nextCfg, service.id, url);
@@ -882,6 +1372,12 @@ export class ViewManager {
           this.config = nextCfg;
           this.onConfigUpdated(nextCfg);
         }
+
+        this.syncDynamicPowerUpData(service.id, url);
+      }
+
+      if (rt.audible) {
+        void this.pollMediaMetadata(service.id);
       }
 
       this.emitSnapshot();
@@ -896,14 +1392,20 @@ export class ViewManager {
 
     wc.on('did-finish-load', () => {
       if (wc.isDestroyed()) return;
-      if (this.config.settings.nativePolishCss) {
-        void wc
-          .insertCSS(buildNativePolishCss(service.id, this.config.settings.theme))
-          .catch(() => {});
-      }
+      this.applyPowerUpsToView(service, view);
+
       const rt = this.runtime.get(service.id);
       if (rt && rt.volume < 0.99) {
         this.applyVolumeToView(service.id, rt.volume);
+      }
+
+      // Restore scroll position & media timestamp if waking from Tier-2 hibernation
+      const snap = this.hibernateSnapshots.get(service.id);
+      if (snap) {
+        this.hibernateSnapshots.delete(service.id);
+        void wc
+          .executeJavaScript(buildRestoreHibernateStateScript(snap.scrollY, snap.mediaTime), true)
+          .catch(() => {});
       }
     });
 
@@ -932,11 +1434,21 @@ export class ViewManager {
           this.onConfigUpdated(nextCfg);
         }
       }
+      if (rt.audible) {
+        void this.pollMediaMetadata(service.id);
+      }
       this.emitSnapshot();
     });
 
-    // Smart Cross-App Link Routing on in-tab navigations (e.g. clicking YouTube/Spotify inside Reddit)
+    // Smart Cross-App Link Routing + Power-Up URL rewrites on navigations
     wc.on('will-navigate', (event, url) => {
+      const rewritten = rewriteUrlForPowerUps(service.id, url, this.config.settings.powerUps);
+      if (rewritten && rewritten !== url) {
+        event.preventDefault();
+        void wc.loadURL(rewritten).catch(() => {});
+        return;
+      }
+
       if (!this.config.settings.smartLinkRouting) return;
       const matched = matchServiceForUrl(url, this.config.services, service.id);
       if (matched) {
@@ -962,7 +1474,10 @@ export class ViewManager {
     wc.on('media-paused', () => {
       const rt = this.runtime.get(service.id);
       if (!rt || wc.isDestroyed()) return;
-      rt.audible = wc.isCurrentlyAudible();
+      const dockAudible =
+        service.id === 'audible' &&
+        Boolean(this.audiblePlayerView && !this.audiblePlayerView.webContents.isDestroyed() && this.audiblePlayerView.webContents.isCurrentlyAudible());
+      rt.audible = wc.isCurrentlyAudible() || dockAudible;
       this.emitSnapshot();
     });
 
@@ -979,6 +1494,17 @@ export class ViewManager {
     });
 
     wc.setWindowOpenHandler(({ url }) => {
+      // Audible Desktop Upgrade: dock Cloud Player right inside OmniDeck instead of a stray popup
+      if (
+        service.id === 'audible' &&
+        this.config.settings.powerUps.audibleDockCloudPlayer &&
+        /audible\./i.test(url) &&
+        /webplayer|cloudplayer/i.test(url)
+      ) {
+        this.openDockedAudiblePlayer(url, partition);
+        return { action: 'deny' };
+      }
+
       if (isInAppPopupUrl(url, service)) {
         return {
           action: 'allow',
@@ -1077,7 +1603,7 @@ export class ViewManager {
         },
         {
           label: `Sleep ${service.name} Tab (Free RAM)`,
-          click: () => this.hibernateService(service.id),
+          click: () => void this.hibernateService(service.id),
         },
       );
 
@@ -1086,10 +1612,10 @@ export class ViewManager {
   }
 
   private async pollMediaMetadata(serviceId: string): Promise<void> {
-    const view = this.views.get(serviceId);
-    if (!view || view.webContents.isDestroyed()) return;
+    const wc = this.getMediaWebContents(serviceId);
+    if (!wc) return;
     try {
-      const result = (await view.webContents.executeJavaScript(
+      const result = (await wc.executeJavaScript(
         READ_MEDIA_METADATA_SCRIPT,
         true,
       )) as MediaMeta | null;
@@ -1150,6 +1676,7 @@ export class ViewManager {
     const [contentW, contentH] = this.mainWindow.getContentSize();
 
     if (this.htmlFullscreenServiceId && !this.overlayOpen && !this.homeActive) {
+      this.setAudibleDockAttached(false);
       for (const id of this.views.keys()) {
         const isFs = id === this.htmlFullscreenServiceId;
         this.setViewAttached(id, isFs);
@@ -1173,16 +1700,42 @@ export class ViewManager {
       splitRatio: this.config.splitView.ratio,
     });
 
+    const dockReady = Boolean(this.audiblePlayerView && !this.audiblePlayerView.webContents.isDestroyed());
+    let dockRect: Electron.Rectangle | null = null;
+
     for (const [id, view] of this.views.entries()) {
+      let rect: Electron.Rectangle | null = null;
       if (id === primaryId && bounds.primary) {
-        this.setViewAttached(id, true);
-        view.setBounds(bounds.primary);
+        rect = { ...bounds.primary };
       } else if (id === secondaryId && bounds.secondary) {
+        rect = { ...bounds.secondary };
+      }
+
+      if (rect) {
+        // When Audible is visible and Cloud Player is docked, share its rect cleanly side-by-side
+        if (id === 'audible' && dockReady && rect.width >= 640) {
+          const playerW = Math.min(430, Math.max(320, Math.round(rect.width * 0.36)));
+          const libW = Math.max(260, rect.width - playerW - 4);
+          dockRect = {
+            x: rect.x + libW + 4,
+            y: rect.y,
+            width: Math.max(200, rect.width - libW - 4),
+            height: rect.height,
+          };
+          rect = { x: rect.x, y: rect.y, width: libW, height: rect.height };
+        }
         this.setViewAttached(id, true);
-        view.setBounds(bounds.secondary);
+        view.setBounds(rect);
       } else {
         this.setViewAttached(id, false);
       }
+    }
+
+    if (dockReady && dockRect) {
+      this.setAudibleDockAttached(true);
+      this.audiblePlayerView!.setBounds(dockRect);
+    } else {
+      this.setAudibleDockAttached(false);
     }
   }
 
@@ -1199,6 +1752,7 @@ export class ViewManager {
   }
 
   private startBackgroundLoops(): void {
+    // 2-Tier Smart Hibernation Loop (Tier-1 soft throttling @ 5 min, Tier-2 lossless sleep @ autoHibernateMinutes)
     this.autoHibernateInterval = setInterval(() => {
       const now = Date.now();
       let changed = false;
@@ -1206,15 +1760,22 @@ export class ViewManager {
       for (const [id, rt] of this.runtime.entries()) {
         const view = this.views.get(id);
         if (view && !view.webContents.isDestroyed()) {
-          rt.audible = view.webContents.isCurrentlyAudible();
+          const dockAudible =
+            id === 'audible' &&
+            Boolean(this.audiblePlayerView && !this.audiblePlayerView.webContents.isDestroyed() && this.audiblePlayerView.webContents.isCurrentlyAudible());
+          rt.audible = view.webContents.isCurrentlyAudible() || dockAudible;
         }
+
+        // Tier-1: Engage background throttling after 5 min of silent inactivity
+        if (shouldSoftThrottle(rt, this.config, now, 5) && view && !view.webContents.isDestroyed()) {
+          view.webContents.setBackgroundThrottling(true);
+          rt.softThrottled = true;
+          changed = true;
+        }
+
+        // Tier-2: Snapshot scroll & timestamp, then unload to free RAM
         if (shouldAutoHibernate(rt, this.config, now)) {
-          this.destroyView(id);
-          rt.mounted = false;
-          rt.hibernated = true;
-          rt.loading = false;
-          rt.audible = false;
-          this.mediaMeta.delete(id);
+          void this.hibernateService(id);
           changed = true;
         }
       }
@@ -1224,8 +1785,9 @@ export class ViewManager {
       }
     }, 60_000);
 
-    // Refresh live track/video/audiobook artwork & artist metadata every 4s for playing media
+    // Low-overhead fallback metadata sync (event-driven triggers handle instant updates; 15s safety net only when visible & playing)
     this.metadataInterval = setInterval(() => {
+      if (this.mainWindow.isDestroyed() || this.mainWindow.isMinimized()) return;
       const npId = this.resolveMediaTargetId();
       if (npId) {
         const rt = this.runtime.get(npId);
@@ -1233,7 +1795,7 @@ export class ViewManager {
           void this.pollMediaMetadata(npId);
         }
       }
-    }, 4_000);
+    }, 15_000);
   }
 
   private emitSnapshot(): DesktopSnapshot {
@@ -1242,3 +1804,4 @@ export class ViewManager {
     return snapshot;
   }
 }
+

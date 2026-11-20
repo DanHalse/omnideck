@@ -192,6 +192,7 @@ function MobileShell() {
           hibernatedIds={hibernatedIds}
           mutedIds={mutedIds}
           desktopModeOverrides={desktopModeOverrides}
+          powerUps={config.settings.powerUps}
           webViewRefs={webViewRefs}
           onNavStateChange={(serviceId, nav) =>
             setNavState((prev) => ({ ...prev, [serviceId]: nav }))

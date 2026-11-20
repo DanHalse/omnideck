@@ -146,6 +146,8 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
       alwaysOnTop,
       isMaximized,
       totalBlockedRequests: totalBlocked,
+      totalMemoryMb: Object.values(runtime).filter((r) => r.mounted).length * 145,
+      audibleDockOpen: false,
       toastMessage,
     };
   };
@@ -267,6 +269,13 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
       }
       return commit();
     },
+    hibernateHeavyTabs: async () => commit(),
+    refreshMemoryMetrics: async () => {
+      for (const id of Object.keys(runtime)) {
+        runtime[id] = { ...runtime[id], memoryMb: runtime[id].mounted ? 145 : 0 };
+      }
+      return commit();
+    },
     wakeService: async (serviceId) => {
       if (runtime[serviceId]) {
         runtime[serviceId] = { ...runtime[serviceId], mounted: true, hibernated: false, lastActiveAt: Date.now() };
@@ -312,6 +321,10 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
     },
     mediaNext: async () => {},
     mediaPrevious: async () => {},
+    mediaLikeTrack: async () => {
+      toastMessage = 'Liked current track';
+      return commit();
+    },
     resumeAutoPaused: async () => {
       if (autoPausedId && runtime[autoPausedId]) {
         runtime[autoPausedId] = { ...runtime[autoPausedId], audible: true };
@@ -331,6 +344,7 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
       alwaysOnTop = !alwaysOnTop;
       return commit();
     },
+    closeAudibleDock: async () => commit(),
 
     windowMinimize: async () => {},
     windowToggleMaximize: async () => {
@@ -379,6 +393,16 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
 
     updateSettings: async (patch) => {
       config = { ...config, settings: { ...config.settings, ...patch } };
+      return commit();
+    },
+    updatePowerUps: async (patch) => {
+      config = {
+        ...config,
+        settings: {
+          ...config.settings,
+          powerUps: { ...config.settings.powerUps, ...patch },
+        },
+      };
       return commit();
     },
     addCustomService: async (input) => {

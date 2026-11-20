@@ -1,8 +1,16 @@
-export type MediaControlAction = 'play-pause' | 'pause' | 'play' | 'next' | 'previous' | 'pip';
+export type MediaControlAction =
+  | 'play-pause'
+  | 'pause'
+  | 'play'
+  | 'next'
+  | 'previous'
+  | 'pip'
+  | 'rewind-15'
+  | 'like-track';
 
 /**
- * Generates an injected JavaScript snippet to control media playback or Video PiP
- * inside YouTube, YouTube Music, Spotify, Twitch, Audible, or any custom HTML5 media app.
+ * Generates an injected JavaScript snippet to control media playback, Video PiP,
+ * guaranteed ±30s Audible skips, 15s sleep-resume rewind, or Spotify/YTM Heart/Like.
  */
 export function buildMediaControlScript(action: MediaControlAction): string {
   return `(function () {
@@ -19,6 +27,15 @@ export function buildMediaControlScript(action: MediaControlAction): string {
     };
 
     const mediaEls = () => Array.from(document.querySelectorAll('video, audio'));
+    const seekPrimaryMedia = (deltaSeconds) => {
+      const m = mediaEls().find((el) => !el.paused) || mediaEls()[0];
+      if (m && Number.isFinite(m.currentTime)) {
+        const maxDur = Number.isFinite(m.duration) ? m.duration : m.currentTime + Math.abs(deltaSeconds);
+        m.currentTime = Math.max(0, Math.min(maxDur, m.currentTime + deltaSeconds));
+        return true;
+      }
+      return false;
+    };
 
     if (${JSON.stringify(action)} === 'pip') {
       const videos = Array.from(document.querySelectorAll('video'))
@@ -36,6 +53,35 @@ export function buildMediaControlScript(action: MediaControlAction): string {
         return 'entered';
       }
       return 'unsupported';
+    }
+
+    if (${JSON.stringify(action)} === 'rewind-15') {
+      return seekPrimaryMedia(-15) ? 'rewound' : 'noop';
+    }
+
+    if (${JSON.stringify(action)} === 'like-track') {
+      if (host.includes('spotify.com')) {
+        if (clickFirst([
+          '[data-testid="add-button"]',
+          'button[aria-label*="Save to Your Library" i]',
+          'button[aria-label*="Save to Liked Songs" i]',
+          'button[aria-label*="Remove from Your Library" i]'
+        ])) return 'liked';
+      }
+      if (host.includes('music.youtube.com')) {
+        if (clickFirst([
+          'ytmusic-player-bar ytmusic-like-button-renderer #button-shape-like button',
+          'ytmusic-player-bar button[aria-label="Like"]',
+          'ytmusic-player-bar button[aria-label="Remove like"]'
+        ])) return 'liked';
+      }
+      if (host.includes('youtube.com')) {
+        if (clickFirst([
+          'like-button-view-model button',
+          'ytd-watch-metadata button[aria-label*="like this video" i]'
+        ])) return 'liked';
+      }
+      return 'noop';
     }
 
     if (${JSON.stringify(action)} === 'pause') {
@@ -107,6 +153,7 @@ export function buildMediaControlScript(action: MediaControlAction): string {
       }
       if (host.includes('audible.')) {
         if (clickFirst(['.adblFastForward', 'button[aria-label*="Forward" i]', 'button[aria-label*="Next" i]'])) return 'ok';
+        if (seekPrimaryMedia(30)) return 'ok';
       }
       return 'noop';
     }
@@ -123,6 +170,7 @@ export function buildMediaControlScript(action: MediaControlAction): string {
       }
       if (host.includes('audible.')) {
         if (clickFirst(['.adblFastRewind', 'button[aria-label*="Back" i]', 'button[aria-label*="Rewind" i]'])) return 'ok';
+        if (seekPrimaryMedia(-30)) return 'ok';
       }
       return 'noop';
     }
