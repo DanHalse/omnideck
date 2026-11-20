@@ -3,6 +3,7 @@ import {
   createInitialRuntimeState,
   getVisibleServices,
   type DesktopSnapshot,
+  type ListeningStatsSummary,
 } from '@omnideck/shared';
 import { getOmniDeckApi } from './api';
 import { NavBar } from './components/NavBar';
@@ -11,9 +12,10 @@ import { SplitStage } from './components/SplitStage';
 import { HomeHub } from './components/HomeHub';
 import { MediaDock } from './components/MediaDock';
 import { CommandPalette } from './components/CommandPalette';
-import { AudioMixerModal } from './components/AudioMixerModal';
+import { AudioMixerModal, type AudioMixerTab } from './components/AudioMixerModal';
 import { ServiceManagerModal } from './components/ServiceManagerModal';
-import { SettingsModal } from './components/SettingsModal';
+import { SettingsModal, type SettingsTab } from './components/SettingsModal';
+import { NowPlayingHub, type NowPlayingMode } from './components/NowPlayingHub';
 import {
   CloseIcon,
   MoreDotsIcon,
@@ -28,10 +30,16 @@ import {
 
 type ModalState = 'none' | 'settings' | 'manage' | 'palette' | 'mixer';
 
+const DRAWER_WIDTH = 380;
+
 export function App() {
   const api = useMemo(() => getOmniDeckApi(), []);
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
   const [modal, setModal] = useState<ModalState>('none');
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
+  const [mixerTab, setMixerTab] = useState<AudioMixerTab>('mixer');
+  const [nowPlayingMode, setNowPlayingMode] = useState<NowPlayingMode>('closed');
+  const [listeningStats, setListeningStats] = useState<ListeningStatsSummary | null>(null);
   const [tempBrowserBarOpen, setTempBrowserBarOpen] = useState(false);
 
   useEffect(() => {
@@ -45,12 +53,28 @@ export function App() {
     });
 
     const unsubCmd = api.onUiCommand((cmd) => {
-      if (cmd.type === 'open-settings') setModal('settings');
+      if (cmd.type === 'open-settings') {
+        setSettingsTab(cmd.tab ?? 'general');
+        setModal('settings');
+      }
       if (cmd.type === 'open-service-manager') setModal('manage');
       if (cmd.type === 'open-command-palette') setModal((cur) => (cur === 'palette' ? 'none' : 'palette'));
-      if (cmd.type === 'open-audio-mixer') setModal((cur) => (cur === 'mixer' ? 'none' : 'mixer'));
+      if (cmd.type === 'open-audio-mixer') {
+        setMixerTab(cmd.tab ?? 'mixer');
+        setModal((cur) => (cur === 'mixer' ? 'none' : 'mixer'));
+      }
+      if (cmd.type === 'toggle-now-playing') {
+        if (cmd.mode) {
+          setNowPlayingMode((cur) => (cur === cmd.mode ? 'closed' : cmd.mode!));
+        } else {
+          setNowPlayingMode((cur) => (cur === 'closed' ? 'drawer' : 'closed'));
+        }
+      }
       if (cmd.type === 'toggle-browser-bar') setTempBrowserBarOpen((v) => !v);
-      if (cmd.type === 'close-overlays') setModal('none');
+      if (cmd.type === 'close-overlays') {
+        setModal('none');
+        setNowPlayingMode((cur) => (cur === 'stage' ? 'closed' : cur));
+      }
     });
 
     return () => {
@@ -66,8 +90,24 @@ export function App() {
   }, [snapshot?.config.settings.theme]);
 
   useEffect(() => {
-    void api.setOverlayOpen(modal !== 'none');
-  }, [api, modal]);
+    void api.setOverlayOpen(modal !== 'none' || nowPlayingMode === 'stage');
+  }, [api, modal, nowPlayingMode]);
+
+  useEffect(() => {
+    void api.setNowPlayingHubActive(nowPlayingMode !== 'closed');
+  }, [api, nowPlayingMode]);
+
+  // Refresh local listening stats whenever the Home Hub opens
+  useEffect(() => {
+    if (!snapshot?.homeActive) return;
+    let active = true;
+    void api.getListeningStats().then((stats) => {
+      if (active) setListeningStats(stats);
+    });
+    return () => {
+      active = false;
+    };
+  }, [api, snapshot?.homeActive]);
 
   const showBrowserBar = Boolean(
     snapshot &&
@@ -76,32 +116,45 @@ export function App() {
   );
 
   const showMediaDock = Boolean(
-    snapshot && (snapshot.nowPlaying.serviceId || snapshot.sleepTimer.active),
+    snapshot &&
+      (snapshot.nowPlaying.serviceId ||
+        snapshot.sleepTimer.active ||
+        nowPlayingMode !== 'closed'),
   );
 
-  // Sync exact frameless chrome insets (top, left, bottom MediaDock) to Electron ViewManager
+  const isTopBar = (snapshot?.config.settings.navPosition ?? 'top') === 'top';
+  const topBarHeight = isTopBar ? 46 : 38;
+  const browserStripHeight = showBrowserBar ? 38 : 0;
+  const bottomDockHeight = showMediaDock ? 48 : 0;
+  const drawerRightInset =
+    nowPlayingMode === 'drawer' && !snapshot?.homeActive ? DRAWER_WIDTH : 0;
+
+  // Sync exact frameless chrome insets (top, left, right drawer, bottom MediaDock) to Electron ViewManager
   useEffect(() => {
     if (!snapshot) return;
-    const isTop = snapshot.config.settings.navPosition === 'top';
-    const topBarHeight = isTop ? 46 : 38;
-    const browserStripHeight = showBrowserBar ? 38 : 0;
-    const bottomDockHeight = showMediaDock ? 48 : 0;
 
     void api.setChromeInsets({
       top: topBarHeight + browserStripHeight,
-      left: isTop ? 0 : 70,
+      left: isTopBar ? 0 : 70,
+      right: drawerRightInset,
       bottom: bottomDockHeight,
       splitDividerWidth: 8,
       splitHeaderHeight: 34,
     });
-  }, [api, snapshot?.config.settings.navPosition, showBrowserBar, showMediaDock]);
+  }, [api, snapshot, isTopBar, topBarHeight, browserStripHeight, bottomDockHeight, drawerRightInset]);
 
   // Keyboard shortcuts when renderer has focus
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && modal !== 'none') {
-        setModal('none');
-        return;
+      if (e.key === 'Escape') {
+        if (modal !== 'none') {
+          setModal('none');
+          return;
+        }
+        if (nowPlayingMode === 'stage') {
+          setNowPlayingMode('closed');
+          return;
+        }
       }
       if (!snapshot) return;
       const mod = e.ctrlKey || e.metaKey;
@@ -117,8 +170,12 @@ export function App() {
       } else if (keyLower === 'b') {
         e.preventDefault();
         setTempBrowserBarOpen((v) => !v);
+      } else if (e.shiftKey && keyLower === 'n') {
+        e.preventDefault();
+        setNowPlayingMode((cur) => (cur === 'closed' ? 'drawer' : 'closed'));
       } else if (e.shiftKey && keyLower === 'v') {
         e.preventDefault();
+        setMixerTab('mixer');
         setModal((cur) => (cur === 'mixer' ? 'none' : 'mixer'));
       } else if (e.key >= '1' && e.key <= '9') {
         const visible = getVisibleServices(snapshot.config);
@@ -132,6 +189,7 @@ export function App() {
         void api.toggleSplitView();
       } else if (e.key === ',') {
         e.preventDefault();
+        setSettingsTab('general');
         setModal('settings');
       } else if (e.shiftKey && keyLower === 'l') {
         e.preventDefault();
@@ -147,7 +205,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [api, modal, snapshot]);
+  }, [api, modal, nowPlayingMode, snapshot]);
 
   if (!snapshot) {
     return (
@@ -170,6 +228,7 @@ export function App() {
     totalBlockedRequests,
     totalMemoryMb,
     audibleDockOpen,
+    miniPlayerOpen,
     toastMessage,
   } = snapshot;
 
@@ -406,15 +465,22 @@ export function App() {
             pinnedFavorites={config.pinnedFavorites}
             recentActivity={config.recentActivity}
             sleepTimer={sleepTimer}
+            listeningStats={listeningStats}
             onSelectService={(id) => void api.selectService(id)}
             onOpenInSplit={(id) => void api.toggleSplitView(true, id)}
             onOpenUrlInService={(id, url) => void api.openServiceUrl(id, url)}
             onSearchInService={(id, q) => void api.searchInService(id, q)}
             onRemoveFavorite={(favId) => void api.removeFavorite(favId)}
             onClearRecent={() => void api.clearRecentActivity()}
+            onClearListeningStats={() => {
+              void api.clearListeningStats().then((empty) => setListeningStats(empty));
+            }}
             onApplyWorkspace={(wsId) => void api.applyWorkspace(wsId)}
             onSetSleepTimer={(mins) => void api.setSleepTimer(mins)}
-            onOpenMixer={() => setModal('mixer')}
+            onOpenMixer={() => {
+              setMixerTab('mixer');
+              setModal('mixer');
+            }}
             onOpenCommandPalette={() => setModal('palette')}
           />
         ) : (
@@ -439,12 +505,43 @@ export function App() {
           />
         )}
 
+        {nowPlayingMode !== 'closed' && (!homeActive || nowPlayingMode === 'stage') && (
+          <NowPlayingHub
+            mode={nowPlayingMode}
+            nowPlaying={nowPlaying}
+            services={config.services}
+            aiConfig={config.settings.aiCompanion}
+            topOffset={topBarHeight + browserStripHeight}
+            bottomOffset={bottomDockHeight}
+            onClose={() => setNowPlayingMode('closed')}
+            onToggleStageMode={() =>
+              setNowPlayingMode((cur) => (cur === 'stage' ? 'drawer' : 'stage'))
+            }
+            onPlayPause={(id) => void api.mediaPlayPause(id)}
+            onPrevious={(id) => void api.mediaPrevious(id)}
+            onNext={(id) => void api.mediaNext(id)}
+            onSearchInService={(svcId, q) => {
+              if (nowPlayingMode === 'stage') setNowPlayingMode('drawer');
+              void api.searchInService(svcId, q);
+            }}
+            onOpenAiSettings={() => {
+              setSettingsTab('ai');
+              setModal('settings');
+            }}
+            onLoadDossier={(input) => api.getArtistDossier(input)}
+            onLoadBandDetails={(bandName) => api.getBandDetails(bandName)}
+            onAskAi={(dossier, q) => api.askMusicAi(dossier, q)}
+          />
+        )}
+
         {showMediaDock && (
           <MediaDock
             nowPlaying={nowPlaying}
             sleepTimer={sleepTimer}
             services={config.services}
             alwaysOnTop={alwaysOnTop}
+            nowPlayingOpen={nowPlayingMode !== 'closed'}
+            miniPlayerOpen={miniPlayerOpen}
             onSelectService={(id) => void api.selectService(id)}
             onPlayPause={(id) => void api.mediaPlayPause(id)}
             onPrevious={(id) => void api.mediaPrevious(id)}
@@ -452,7 +549,14 @@ export function App() {
             onResumeAutoPaused={() => void api.resumeAutoPaused()}
             onToggleMute={(id) => void api.toggleMute(id)}
             onSetVolume={(id, vol) => void api.setVolume(id, vol)}
-            onOpenMixer={() => setModal('mixer')}
+            onOpenMixer={() => {
+              setMixerTab('mixer');
+              setModal('mixer');
+            }}
+            onToggleNowPlayingHub={() =>
+              setNowPlayingMode((cur) => (cur === 'closed' ? 'drawer' : 'closed'))
+            }
+            onToggleMiniPlayer={() => void api.toggleMiniPlayer()}
             onTriggerPip={() => void api.triggerPip(activeService.id)}
             onToggleAlwaysOnTop={() => void api.toggleAlwaysOnTop()}
           />
@@ -485,7 +589,19 @@ export function App() {
           onTriggerPip={() => void api.triggerPip(activeService.id)}
           onLikeCurrentTrack={() => void api.mediaLikeTrack()}
           onCloseAudibleDock={() => void api.closeAudibleDock()}
-          onOpenMixer={() => setModal('mixer')}
+          onOpenMixer={() => {
+            setMixerTab('mixer');
+            setModal('mixer');
+          }}
+          onOpenEqualizer={() => {
+            setMixerTab('eq');
+            setModal('mixer');
+          }}
+          onToggleNowPlayingDrawer={() =>
+            setNowPlayingMode((cur) => (cur === 'drawer' ? 'closed' : 'drawer'))
+          }
+          onOpenNowPlayingStage={() => setNowPlayingMode('stage')}
+          onToggleMiniPlayer={() => void api.toggleMiniPlayer()}
           onSetSleepTimer={(mins) => void api.setSleepTimer(mins)}
           onHibernateInactive={() => void api.hibernateInactive()}
           onHibernateHeavyTabs={() => void api.hibernateHeavyTabs(350)}
@@ -496,22 +612,32 @@ export function App() {
             }
           }}
           onOpenManageApps={() => setModal('manage')}
-          onOpenSettings={() => setModal('settings')}
+          onOpenSettings={() => {
+            setSettingsTab('general');
+            setModal('settings');
+          }}
           onCheckUpdates={() => void api.checkForUpdates()}
         />
       )}
 
       {modal === 'mixer' && (
         <AudioMixerModal
+          initialTab={mixerTab}
           services={visibleServices}
           runtime={runtime}
           sleepTimer={sleepTimer}
+          audioFocusMode={config.settings.audioFocusMode}
+          audioDuckLevel={config.settings.audioDuckLevel}
+          equalizer={config.settings.equalizer}
           onClose={() => setModal('none')}
           onSetVolume={(id, vol) => void api.setVolume(id, vol)}
           onToggleMute={(id) => void api.toggleMute(id)}
           onMuteAll={() => void api.muteAll()}
           onPlayPause={(id) => void api.mediaPlayPause(id)}
           onSetSleepTimer={(mins) => void api.setSleepTimer(mins)}
+          onChangeAudioFocusMode={(mode) => void api.updateSettings({ audioFocusMode: mode })}
+          onChangeAudioDuckLevel={(level) => void api.updateSettings({ audioDuckLevel: level })}
+          onUpdateEqualizer={(patch) => void api.updateEqualizer(patch)}
         />
       )}
 
@@ -536,6 +662,7 @@ export function App() {
 
       {modal === 'settings' && (
         <SettingsModal
+          initialTab={settingsTab}
           settings={config.settings}
           services={config.services}
           runtime={runtime}
@@ -552,6 +679,7 @@ export function App() {
           onUpdatePowerUps={async (patch) => {
             await api.updatePowerUps(patch);
           }}
+          onTestAiConnection={(cfg) => api.testAiConnection(cfg)}
           onRefreshMemory={async () => {
             await api.refreshMemoryMetrics();
           }}

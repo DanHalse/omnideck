@@ -15,8 +15,11 @@ import {
   addCustomService,
   applyWorkspace,
   buildServiceSearchUrl,
+  clampDuckLevel,
   deleteCustomWorkspace,
   getVisibleServices,
+  mergeAiCompanionConfig,
+  mergeEqualizerConfig,
   mergePowerUpsConfig,
   moveServiceById,
   parseImportedConfig,
@@ -34,11 +37,14 @@ import {
   toggleServiceVisibility,
   toggleSplitView,
   updateService,
+  type AiCompanionConfig,
   type AppSettings,
+  type ArtistDossier,
   type ChromeInsets,
   type CustomServiceInput,
   type DesktopSnapshot,
   type DrmStatus,
+  type EqualizerConfig,
   type PowerUpsConfig,
   type ServiceDefinition,
   type WindowBounds,
@@ -46,6 +52,9 @@ import {
 import { ConfigStore } from './store.js';
 import { ViewManager } from './viewManager.js';
 import { UpdateManager } from './updater.js';
+import { MusicIntelService } from './musicIntel.js';
+import { ListeningStatsStore } from './listeningStats.js';
+import { MiniPlayerManager } from './miniPlayer.js';
 import type { UiCommandEvent } from './ipcTypes.js';
 
 app.setName('OmniDeck');
@@ -87,6 +96,9 @@ let tray: Tray | null = null;
 let store: ConfigStore | null = null;
 let viewManager: ViewManager | null = null;
 let updateManager: UpdateManager | null = null;
+let musicIntel: MusicIntelService | null = null;
+let listeningStats: ListeningStatsStore | null = null;
+let miniPlayer: MiniPlayerManager | null = null;
 let forceQuitting = false;
 let audibleFlushedOnQuit = false;
 let mediaKeysRegistered = false;
@@ -151,6 +163,7 @@ function broadcastSnapshot(snapshot: DesktopSnapshot): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('omnideck:snapshot', snapshot);
   }
+  miniPlayer?.broadcast(snapshot);
   refreshTrayMenu();
 }
 
@@ -791,16 +804,37 @@ function registerIpcHandlers(): void {
     return viewManager.syncConfig(updated);
   });
 
-  // Settings, Power-Ups & Services
+  // Settings, Power-Ups, Equalizer, AI Companion & Services
   ipcMain.handle('omnideck:update-settings', (_e, patch: Partial<AppSettings>) => {
     if (!store || !viewManager) return null;
     const current = store.get();
+    const nextAudioFocus =
+      patch.audioFocusMode ??
+      (typeof patch.smartAudioSwitching === 'boolean'
+        ? patch.smartAudioSwitching
+          ? current.settings.audioFocusMode === 'duck'
+            ? 'duck'
+            : 'pause'
+          : 'off'
+        : current.settings.audioFocusMode);
     const nextSettings: AppSettings = {
       ...current.settings,
       ...patch,
+      audioFocusMode: nextAudioFocus,
+      smartAudioSwitching: nextAudioFocus !== 'off',
+      audioDuckLevel:
+        typeof patch.audioDuckLevel === 'number'
+          ? clampDuckLevel(patch.audioDuckLevel)
+          : current.settings.audioDuckLevel,
       powerUps: patch.powerUps
         ? mergePowerUpsConfig({ ...current.settings.powerUps, ...patch.powerUps })
         : current.settings.powerUps,
+      equalizer: patch.equalizer
+        ? mergeEqualizerConfig({ ...current.settings.equalizer, ...patch.equalizer })
+        : current.settings.equalizer,
+      aiCompanion: patch.aiCompanion
+        ? mergeAiCompanionConfig({ ...current.settings.aiCompanion, ...patch.aiCompanion })
+        : current.settings.aiCompanion,
     };
     const updated = store.set({
       ...current,
@@ -826,6 +860,20 @@ function registerIpcHandlers(): void {
       },
     });
     syncGlobalLikeShortcut(nextPowerUps.spotifyLikeShortcut);
+    return viewManager.syncConfig(updated);
+  });
+
+  ipcMain.handle('omnideck:update-equalizer', (_e, patch: Partial<EqualizerConfig>) => {
+    if (!store || !viewManager) return null;
+    const current = store.get();
+    const nextEq = mergeEqualizerConfig({ ...current.settings.equalizer, ...patch });
+    const updated = store.set({
+      ...current,
+      settings: {
+        ...current.settings,
+        equalizer: nextEq,
+      },
+    });
     return viewManager.syncConfig(updated);
   });
 
@@ -971,15 +1019,100 @@ function registerIpcHandlers(): void {
   ipcMain.handle('omnideck:set-chrome-insets', (_e, insets: ChromeInsets) => {
     viewManager?.setChromeInsets(insets);
   });
+
+  // AI Now Playing & Artist Discovery Hub
+  ipcMain.handle(
+    'omnideck:get-artist-dossier',
+    async (
+      _e,
+      input: {
+        serviceId: string;
+        title: string;
+        artist?: string;
+        album?: string;
+        artworkUrl?: string;
+        durationSec?: number;
+        forceRefresh?: boolean;
+      },
+    ) => {
+      if (!musicIntel) musicIntel = new MusicIntelService();
+      const aiConfig = store?.get().settings.aiCompanion ?? mergeAiCompanionConfig(null);
+      const dossier = await musicIntel.getArtistDossier(input, aiConfig);
+      if (dossier.lyrics?.synced && dossier.lyrics.lines.length > 0 && viewManager) {
+        viewManager.setActiveLyrics(
+          `${input.serviceId}::${input.title.toLowerCase()}`,
+          dossier.lyrics.lines,
+        );
+      }
+      return dossier;
+    },
+  );
+
+  ipcMain.handle('omnideck:get-band-details', async (_e, bandName: string) => {
+    if (!musicIntel) musicIntel = new MusicIntelService();
+    return musicIntel.getBandDetails(bandName);
+  });
+
+  ipcMain.handle('omnideck:ask-music-ai', async (_e, dossier: ArtistDossier, question: string) => {
+    if (!musicIntel) musicIntel = new MusicIntelService();
+    const aiConfig = store?.get().settings.aiCompanion ?? mergeAiCompanionConfig(null);
+    return musicIntel.askMusicAi(dossier, question, aiConfig);
+  });
+
+  ipcMain.handle('omnideck:test-ai-connection', async (_e, config: AiCompanionConfig) => {
+    if (!musicIntel) musicIntel = new MusicIntelService();
+    return musicIntel.testAiConnection(mergeAiCompanionConfig(config));
+  });
+
+  ipcMain.handle('omnideck:set-now-playing-active', (_e, active: boolean) => {
+    viewManager?.setNowPlayingHubActive(Boolean(active));
+  });
+
+  // Floating Mini-Player HUD
+  ipcMain.handle('omnideck:toggle-mini-player', (_e, open?: boolean) => {
+    if (!viewManager || !miniPlayer) return viewManager?.getSnapshot() ?? null;
+    const snap = viewManager.getSnapshot();
+    if (typeof open === 'boolean') {
+      if (open) miniPlayer.open(snap);
+      else miniPlayer.close();
+    } else {
+      miniPlayer.toggle(snap);
+    }
+    return viewManager.getSnapshot();
+  });
+
+  ipcMain.handle('omnideck:focus-main-window', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+
+  // Private Local Listening Stats ("OmniDeck Wrapped")
+  ipcMain.handle('omnideck:get-listening-stats', () => {
+    if (!listeningStats) listeningStats = new ListeningStatsStore();
+    return listeningStats.getSummary();
+  });
+
+  ipcMain.handle('omnideck:clear-listening-stats', () => {
+    if (!listeningStats) listeningStats = new ListeningStatsStore();
+    return listeningStats.clear();
+  });
 }
 
 async function createMainWindow(drmStatus: DrmStatus): Promise<void> {
   store = new ConfigStore();
+  listeningStats = new ListeningStatsStore();
+  musicIntel = new MusicIntelService();
   const initialConfig = store.get();
   const bounds = resolveInitialWindowBounds(initialConfig.windowBounds);
 
   updateManager = new UpdateManager((nextUpdate) => {
     viewManager?.setUpdateState(nextUpdate);
+  });
+
+  miniPlayer = new MiniPlayerManager(() => {
+    viewManager?.setMiniPlayerOpen(Boolean(miniPlayer?.isOpen()));
   });
 
   mainWindow = new BrowserWindow({
@@ -1015,6 +1148,7 @@ async function createMainWindow(drmStatus: DrmStatus): Promise<void> {
     (nextCfg) => {
       store?.set(nextCfg);
     },
+    listeningStats,
   );
 
   syncHardwareMediaKeys(initialConfig.settings.hardwareMediaKeys);
@@ -1025,6 +1159,19 @@ async function createMainWindow(drmStatus: DrmStatus): Promise<void> {
 
   mainWindow.on('resize', scheduleSaveWindowBounds);
   mainWindow.on('move', scheduleSaveWindowBounds);
+
+  const maybeAutoOpenMiniPlayer = () => {
+    if (
+      store?.get().settings.miniPlayerAutoShowOnMinimize &&
+      viewManager?.hasAudiblePlayback() &&
+      miniPlayer &&
+      !miniPlayer.isOpen()
+    ) {
+      miniPlayer.open(viewManager.getSnapshot());
+    }
+  };
+  mainWindow.on('minimize', maybeAutoOpenMiniPlayer);
+  mainWindow.on('hide', maybeAutoOpenMiniPlayer);
 
   mainWindow.on('close', (event) => {
     if (forceQuitting) return;
@@ -1055,6 +1202,8 @@ async function createMainWindow(drmStatus: DrmStatus): Promise<void> {
 
   mainWindow.on('closed', () => {
     updateManager?.stopSchedule();
+    miniPlayer?.dispose();
+    miniPlayer = null;
     viewManager?.dispose();
     viewManager = null;
     mainWindow = null;

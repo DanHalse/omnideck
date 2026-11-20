@@ -148,6 +148,7 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
       totalBlockedRequests: totalBlocked,
       totalMemoryMb: Object.values(runtime).filter((r) => r.mounted).length * 145,
       audibleDockOpen: false,
+      miniPlayerOpen: false,
       toastMessage,
     };
   };
@@ -345,6 +346,73 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
       return commit();
     },
     closeAudibleDock: async () => commit(),
+    updateEqualizer: async (patch) => {
+      config = {
+        ...config,
+        settings: {
+          ...config.settings,
+          equalizer: { ...config.settings.equalizer, ...patch },
+        },
+      };
+      return commit();
+    },
+
+    getArtistDossier: async (input) => ({
+      queryKey: `preview::${input.title}`,
+      fetchedAt: Date.now(),
+      serviceId: input.serviceId,
+      trackTitle: input.title || 'Preview Track',
+      artistName: input.artist || 'Preview Artist',
+      albumName: input.album,
+      artworkUrl: input.artworkUrl,
+      bio: 'Browser preview mode — run the desktop app for live MusicBrainz, Wikipedia, Deezer, LRCLIB, and optional AI Artist Discovery.',
+      genres: ['indie', 'alternative'],
+      members: [],
+      essentialAlbums: [],
+      suggestedBands: [],
+      lyrics: { synced: false, lines: [], plainText: '', source: 'none' },
+      aiEnriched: false,
+      sources: [],
+    }),
+    getBandDetails: async (bandName) => ({
+      id: `preview-${bandName}`,
+      name: bandName,
+      bio: 'Run the desktop app to load full band bios and top tracks.',
+      topTracks: [],
+      detailsLoaded: true,
+    }),
+    askMusicAi: async () => ({
+      answer: '',
+      provider: 'none',
+      error: 'Interactive AI Companion runs in the OmniDeck Desktop app.',
+    }),
+    testAiConnection: async () => ({
+      ok: true,
+      message: 'Browser preview mode.',
+    }),
+    setNowPlayingHubActive: async () => {},
+
+    toggleMiniPlayer: async () => commit(),
+    focusMainWindow: async () => {},
+
+    getListeningStats: async () => ({
+      totalPlays: 0,
+      totalMinutes: 0,
+      streakDays: 0,
+      byService: [],
+      topArtists: [],
+      topTracks: [],
+      recentPlays: [],
+    }),
+    clearListeningStats: async () => ({
+      totalPlays: 0,
+      totalMinutes: 0,
+      streakDays: 0,
+      byService: [],
+      topArtists: [],
+      topTracks: [],
+      recentPlays: [],
+    }),
 
     windowMinimize: async () => {},
     windowToggleMaximize: async () => {

@@ -5,6 +5,7 @@ import type {
 } from '@omnideck/shared';
 import { ServiceIcon } from './ServiceIcon';
 import {
+  MiniPlayerIcon,
   PauseIcon,
   PinIcon,
   PipIcon,
@@ -12,6 +13,7 @@ import {
   SkipBackIcon,
   SkipForwardIcon,
   SlidersIcon,
+  SparklesIcon,
   TimerIcon,
   VolumeIcon,
   VolumeOffIcon,
@@ -22,6 +24,8 @@ interface MediaDockProps {
   sleepTimer: SleepTimerState;
   services: ServiceDefinition[];
   alwaysOnTop: boolean;
+  nowPlayingOpen: boolean;
+  miniPlayerOpen: boolean;
   onSelectService: (serviceId: string) => void;
   onPlayPause: (serviceId?: string) => void;
   onPrevious: (serviceId?: string) => void;
@@ -30,6 +34,8 @@ interface MediaDockProps {
   onToggleMute: (serviceId: string) => void;
   onSetVolume: (serviceId: string, volume: number) => void;
   onOpenMixer: () => void;
+  onToggleNowPlayingHub: () => void;
+  onToggleMiniPlayer: () => void;
   onTriggerPip: () => void;
   onToggleAlwaysOnTop: () => void;
 }
@@ -47,6 +53,8 @@ export function MediaDock({
   sleepTimer,
   services,
   alwaysOnTop,
+  nowPlayingOpen,
+  miniPlayerOpen,
   onSelectService,
   onPlayPause,
   onPrevious,
@@ -55,6 +63,8 @@ export function MediaDock({
   onToggleMute,
   onSetVolume,
   onOpenMixer,
+  onToggleNowPlayingHub,
+  onToggleMiniPlayer,
   onTriggerPip,
   onToggleAlwaysOnTop,
 }: MediaDockProps) {
@@ -64,6 +74,7 @@ export function MediaDock({
   const autoPausedService = nowPlaying.autoPausedServiceId
     ? services.find((s) => s.id === nowPlaying.autoPausedServiceId)
     : undefined;
+  const isDucked = Boolean(nowPlaying.duckedServiceIds && nowPlaying.duckedServiceIds.length > 0);
 
   return (
     <footer className="media-dock" aria-label="Now Playing Cockpit">
@@ -91,6 +102,7 @@ export function MediaDock({
                 {nowPlaying.artist && nowPlaying.artist !== npService.name
                   ? ` · ${nowPlaying.artist}`
                   : ''}
+                {isDucked ? ' · Ducked' : ''}
               </div>
             </div>
           </button>
@@ -170,8 +182,18 @@ export function MediaDock({
 
         <button
           type="button"
+          className={`pill-btn ${nowPlayingOpen ? 'pill-btn--active' : ''}`}
+          title="AI Artist Info, Similar Bands & Synced Lyrics (Ctrl+Shift+N)"
+          onClick={onToggleNowPlayingHub}
+        >
+          <SparklesIcon size={12} />
+          <span>Artist Hub</span>
+        </button>
+
+        <button
+          type="button"
           className={`pill-btn ${sleepTimer.active ? 'pill-btn--active' : ''}`}
-          title="Audio Mixer & Sleep Timer (Ctrl+Shift+V)"
+          title="Audio Mixer, 10-Band EQ & Sleep Timer (Ctrl+Shift+V)"
           onClick={onOpenMixer}
         >
           {sleepTimer.active ? (
@@ -184,9 +206,18 @@ export function MediaDock({
           ) : (
             <>
               <SlidersIcon size={12} />
-              <span>Mixer</span>
+              <span>Mixer &amp; EQ</span>
             </>
           )}
+        </button>
+
+        <button
+          type="button"
+          className={`icon-btn ${miniPlayerOpen ? 'icon-btn--active' : ''}`}
+          title="Toggle Floating Mini-Player HUD"
+          onClick={onToggleMiniPlayer}
+        >
+          <MiniPlayerIcon size={14} />
         </button>
 
         <button

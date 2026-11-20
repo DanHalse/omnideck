@@ -1,10 +1,16 @@
 import type {
+  AiAskResponse,
+  AiCompanionConfig,
   AppSettings,
+  ArtistDossier,
   ChromeInsets,
   CustomServiceInput,
   DesktopSnapshot,
+  EqualizerConfig,
+  ListeningStatsSummary,
   PowerUpsConfig,
   ServiceDefinition,
+  SuggestedBand,
   UpdateState,
 } from '@omnideck/shared';
 
@@ -40,7 +46,7 @@ export interface OmniDeckBridge {
   removeFavorite: (favoriteId: string) => Promise<DesktopSnapshot>;
   clearRecentActivity: () => Promise<DesktopSnapshot>;
 
-  // Unified Media Controls, Smart Audio Switching, Sleep Timer, Audible Dock & PiP
+  // Unified Media Controls, Smart Audio Switching/Ducking, 10-Band EQ, Sleep Timer, Audible Dock & PiP
   mediaPlayPause: (serviceId?: string) => Promise<DesktopSnapshot>;
   mediaNext: (serviceId?: string) => Promise<void>;
   mediaPrevious: (serviceId?: string) => Promise<void>;
@@ -50,6 +56,30 @@ export interface OmniDeckBridge {
   triggerPip: (serviceId: string) => Promise<void>;
   toggleAlwaysOnTop: () => Promise<DesktopSnapshot>;
   closeAudibleDock: () => Promise<DesktopSnapshot>;
+  updateEqualizer: (patch: Partial<EqualizerConfig>) => Promise<DesktopSnapshot>;
+
+  // AI Now Playing & Artist Discovery Hub
+  getArtistDossier: (input: {
+    serviceId: string;
+    title: string;
+    artist?: string;
+    album?: string;
+    artworkUrl?: string;
+    durationSec?: number;
+    forceRefresh?: boolean;
+  }) => Promise<ArtistDossier>;
+  getBandDetails: (bandName: string) => Promise<SuggestedBand>;
+  askMusicAi: (dossier: ArtistDossier, question: string) => Promise<AiAskResponse>;
+  testAiConnection: (config: AiCompanionConfig) => Promise<{ ok: boolean; message: string }>;
+  setNowPlayingHubActive: (active: boolean) => Promise<void>;
+
+  // Floating Mini-Player HUD
+  toggleMiniPlayer: (open?: boolean) => Promise<DesktopSnapshot>;
+  focusMainWindow: () => Promise<void>;
+
+  // Private Local Listening Stats ("OmniDeck Wrapped")
+  getListeningStats: () => Promise<ListeningStatsSummary>;
+  clearListeningStats: () => Promise<ListeningStatsSummary>;
 
   // Native Frameless Window Controls
   windowMinimize: () => Promise<void>;
@@ -113,9 +143,10 @@ export interface OmniDeckBridge {
 }
 
 export type UiCommandEvent =
-  | { type: 'open-settings' }
+  | { type: 'open-settings'; tab?: 'general' | 'powerups' | 'ai' | 'performance' | 'workspaces' }
   | { type: 'open-service-manager' }
   | { type: 'open-command-palette' }
-  | { type: 'open-audio-mixer' }
+  | { type: 'open-audio-mixer'; tab?: 'mixer' | 'eq' }
+  | { type: 'toggle-now-playing'; mode?: 'drawer' | 'stage' }
   | { type: 'toggle-browser-bar' }
   | { type: 'close-overlays' };

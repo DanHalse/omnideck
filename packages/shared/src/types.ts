@@ -120,6 +120,131 @@ export interface PowerUpsConfig {
   spotifyLikeShortcut: string;
 }
 
+export type AudioFocusMode = 'off' | 'pause' | 'duck';
+
+export type EqPresetId =
+  | 'flat'
+  | 'bass-boost'
+  | 'rock'
+  | 'vocal'
+  | 'late-night'
+  | 'electronic'
+  | 'custom';
+
+export interface EqualizerConfig {
+  enabled: boolean;
+  preset: EqPresetId;
+  /** Preamp gain in dB [-12, +12]. */
+  preampDb: number;
+  /** 10-band gains in dB [-12, +12] at 32, 64, 125, 250, 500, 1k, 2k, 4k, 8k, 16k Hz. */
+  bands: number[];
+}
+
+export type AiProviderId = 'none' | 'gemini' | 'openai' | 'anthropic' | 'ollama';
+
+export interface AiCompanionConfig {
+  provider: AiProviderId;
+  apiKey: string;
+  model: string;
+  ollamaBaseUrl: string;
+  autoEnrich: boolean;
+}
+
+export interface LyricLine {
+  timeSec: number;
+  text: string;
+}
+
+export interface SyncedLyricsResult {
+  synced: boolean;
+  lines: LyricLine[];
+  plainText: string;
+  source: 'lrclib' | 'none';
+}
+
+export interface SuggestedBandTrack {
+  title: string;
+  album?: string;
+  previewUrl?: string;
+  durationSec?: number;
+}
+
+export interface SuggestedBand {
+  id: string;
+  name: string;
+  pictureUrl?: string;
+  fans?: number;
+  tags?: string[];
+  reason?: string;
+  bio?: string;
+  topTracks: SuggestedBandTrack[];
+  detailsLoaded?: boolean;
+}
+
+export interface ArtistDossier {
+  queryKey: string;
+  fetchedAt: number;
+  serviceId: string;
+  trackTitle: string;
+  artistName: string;
+  albumName?: string;
+  artworkUrl?: string;
+  bio: string;
+  origin?: string;
+  activeYears?: string;
+  genres: string[];
+  members: string[];
+  essentialAlbums: string[];
+  trackContext?: string;
+  suggestedBands: SuggestedBand[];
+  lyrics?: SyncedLyricsResult;
+  aiEnriched: boolean;
+  aiProvider?: AiProviderId;
+  sources: string[];
+}
+
+export interface AiAskResponse {
+  answer: string;
+  provider: AiProviderId;
+  error?: string;
+}
+
+export interface ListeningEntry {
+  id: string;
+  serviceId: string;
+  title: string;
+  artist: string;
+  album?: string;
+  artworkUrl?: string;
+  url?: string;
+  startedAt: number;
+  durationSec: number;
+}
+
+export interface ListeningStatsSummary {
+  totalPlays: number;
+  totalMinutes: number;
+  streakDays: number;
+  byService: Array<{ serviceId: string; plays: number; minutes: number }>;
+  topArtists: Array<{
+    name: string;
+    plays: number;
+    minutes: number;
+    artworkUrl?: string;
+    serviceId: string;
+  }>;
+  topTracks: Array<{
+    title: string;
+    artist: string;
+    plays: number;
+    minutes: number;
+    artworkUrl?: string;
+    serviceId: string;
+    url?: string;
+  }>;
+  recentPlays: ListeningEntry[];
+}
+
 export interface AppSettings {
   navPosition: NavPosition;
   theme: ThemeMode;
@@ -145,8 +270,14 @@ export interface AppSettings {
   autoHibernateMinutes: number;
   /** Ask before quitting when at least one service is actively playing audio. */
   confirmBeforeQuitWithAudio: boolean;
-  /** Automatically pause competing background audio when another app starts playing. */
+  /** Legacy boolean kept synced with audioFocusMode !== 'off'. */
   smartAudioSwitching: boolean;
+  /** 3-mode audio focus behavior: off, pause competing audio, or smoothly duck music while video plays. */
+  audioFocusMode: AudioFocusMode;
+  /** Target multiplicative volume level [0.05, 0.5] when Smart Ducking lowers music. */
+  audioDuckLevel: number;
+  /** Automatically show the floating Mini-Player HUD when minimizing OmniDeck during playback. */
+  miniPlayerAutoShowOnMinimize: boolean;
   /** Bind OS hardware media keys (Play/Pause, Next, Previous) to the active audio service. */
   hardwareMediaKeys: boolean;
   /** Enable built-in network-level ad & tracker shield across services. */
@@ -159,6 +290,10 @@ export interface AppSettings {
   hardwareVideoAcceleration: boolean;
   /** Curated per-platform quality-of-life Power-Ups. */
   powerUps: PowerUpsConfig;
+  /** Built-in 10-band Web Audio Equalizer applied across supported media tabs. */
+  equalizer: EqualizerConfig;
+  /** Optional BYOK or local Ollama AI provider for Music Discovery & Now Playing Hub. */
+  aiCompanion: AiCompanionConfig;
 }
 
 export interface PersistedConfig {
@@ -204,6 +339,10 @@ export interface NowPlayingState {
   muted: boolean;
   volume: number;
   autoPausedServiceId: string | null;
+  currentTimeSec?: number;
+  durationSec?: number;
+  currentLyricLine?: string;
+  duckedServiceIds?: string[];
 }
 
 export interface SleepTimerState {
@@ -256,6 +395,7 @@ export interface DesktopSnapshot {
   totalBlockedRequests: number;
   totalMemoryMb: number;
   audibleDockOpen: boolean;
+  miniPlayerOpen: boolean;
   toastMessage: string | null;
 }
 

@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import type {
+  ListeningStatsSummary,
   PinnedFavorite,
   RecentActivityItem,
   ServiceDefinition,
@@ -11,7 +12,9 @@ import { ServiceIcon } from './ServiceIcon';
 import {
   CloseIcon,
   EqualizerBars,
+  FlameIcon,
   MoonIcon,
+  PlayIcon,
   SearchIcon,
   SlidersIcon,
   SplitIcon,
@@ -28,16 +31,25 @@ interface HomeHubProps {
   pinnedFavorites: PinnedFavorite[];
   recentActivity: RecentActivityItem[];
   sleepTimer: SleepTimerState;
+  listeningStats: ListeningStatsSummary | null;
   onSelectService: (serviceId: string) => void;
   onOpenInSplit: (serviceId: string) => void;
   onOpenUrlInService: (serviceId: string, url: string) => void;
   onSearchInService: (serviceId: string, query: string) => void;
   onRemoveFavorite: (favoriteId: string) => void;
   onClearRecent: () => void;
+  onClearListeningStats: () => void;
   onApplyWorkspace: (workspaceId: string) => void;
   onSetSleepTimer: (minutes: number) => void;
   onOpenMixer: () => void;
   onOpenCommandPalette: () => void;
+}
+
+function formatHoursMinutes(minutes: number): string {
+  if (minutes < 60) return `${minutes}m`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
 }
 
 export function HomeHub({
@@ -49,12 +61,14 @@ export function HomeHub({
   pinnedFavorites,
   recentActivity,
   sleepTimer,
+  listeningStats,
   onSelectService,
   onOpenInSplit,
   onOpenUrlInService,
   onSearchInService,
   onRemoveFavorite,
   onClearRecent,
+  onClearListeningStats,
   onApplyWorkspace,
   onSetSleepTimer,
   onOpenMixer,
@@ -62,6 +76,7 @@ export function HomeHub({
 }: HomeHubProps) {
   const [query, setQuery] = useState('');
   const [searchTargetId, setSearchTargetId] = useState<string>(services[0]?.id ?? 'youtube');
+  const [statsExpanded, setStatsExpanded] = useState(false);
 
   const getService = (id: string) => allServices.find((s) => s.id === id);
 
@@ -314,6 +329,218 @@ export function HomeHub({
             )}
           </section>
         </div>
+
+        {/* Private Local Listening Stats ("OmniDeck Wrapped") */}
+        <section className="home-section stats-card">
+          <div className="home-section__header">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <FlameIcon size={14} />
+              <h2 className="section-label" style={{ margin: 0 }}>
+                Listening Stats &amp; History (Local &amp; Private)
+              </h2>
+            </div>
+            <div className="control-group" style={{ gap: 6 }}>
+              {listeningStats && listeningStats.totalPlays > 0 && (
+                <>
+                  <button
+                    type="button"
+                    className="pill-btn"
+                    onClick={() => setStatsExpanded((v) => !v)}
+                  >
+                    {statsExpanded ? 'Compact View' : 'Full Stats & History'}
+                  </button>
+                  <button type="button" className="pill-btn" onClick={onClearListeningStats}>
+                    Clear Stats
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {!listeningStats || listeningStats.totalPlays === 0 ? (
+            <div className="home-empty">
+              <FlameIcon size={16} />
+              <span>
+                Your private listening stats across YouTube Music, Spotify, Audible, and YouTube
+                will build here automatically as you listen — stored 100% locally on your PC.
+              </span>
+            </div>
+          ) : (
+            <div className="stats-body">
+              <div className="stats-kpis">
+                <div className="stats-kpi">
+                  <div className="stats-kpi__val">{listeningStats.totalPlays}</div>
+                  <div className="stats-kpi__label">Tracks Played</div>
+                </div>
+                <div className="stats-kpi">
+                  <div className="stats-kpi__val">
+                    {formatHoursMinutes(listeningStats.totalMinutes)}
+                  </div>
+                  <div className="stats-kpi__label">Listening Time</div>
+                </div>
+                <div className="stats-kpi">
+                  <div className="stats-kpi__val">
+                    {listeningStats.streakDays}d
+                  </div>
+                  <div className="stats-kpi__label">Daily Streak</div>
+                </div>
+                <div className="stats-kpi">
+                  <div className="stats-kpi__val">
+                    {listeningStats.topArtists[0]?.name || '—'}
+                  </div>
+                  <div className="stats-kpi__label">Top Artist</div>
+                </div>
+              </div>
+
+              {listeningStats.byService.length > 0 && (
+                <div className="stats-bars">
+                  {listeningStats.byService.map((row) => {
+                    const svc = getService(row.serviceId);
+                    const pct =
+                      listeningStats.totalMinutes > 0
+                        ? Math.max(6, Math.round((row.minutes / listeningStats.totalMinutes) * 100))
+                        : Math.max(6, Math.round((row.plays / listeningStats.totalPlays) * 100));
+                    return (
+                      <div key={row.serviceId} className="stats-bar-row">
+                        <div className="stats-bar-row__label">
+                          <ServiceIcon
+                            icon={svc?.icon ?? 'globe'}
+                            size={13}
+                            color={svc?.accentColor ?? '#E87A3E'}
+                          />
+                          <span>{svc?.name ?? row.serviceId}</span>
+                        </div>
+                        <div className="stats-bar-row__track">
+                          <div
+                            className="stats-bar-row__fill"
+                            style={{
+                              width: `${pct}%`,
+                              background: svc?.accentColor ?? 'var(--accent-primary)',
+                            }}
+                          />
+                        </div>
+                        <span className="stats-bar-row__val">
+                          {formatHoursMinutes(row.minutes)} · {row.plays}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div className="home-columns">
+                <div>
+                  <div className="np-card__eyebrow" style={{ marginBottom: 6 }}>
+                    Top Artists
+                  </div>
+                  <div className="home-list">
+                    {listeningStats.topArtists
+                      .slice(0, statsExpanded ? 10 : 4)
+                      .map((artist, idx) => (
+                        <div key={`${artist.name}-${idx}`} className="home-list-item">
+                          <button
+                            type="button"
+                            className="home-list-item__main"
+                            title={`Open ${artist.name} in YouTube Music`}
+                            onClick={() =>
+                              onSearchInService(
+                                artist.serviceId === 'spotify' ? 'spotify' : 'youtube-music',
+                                artist.name,
+                              )
+                            }
+                          >
+                            <span className="stats-rank">#{idx + 1}</span>
+                            <div className="home-list-item__text">
+                              <div className="home-list-item__title">{artist.name}</div>
+                              <div className="home-list-item__meta">
+                                {artist.plays} plays · {formatHoursMinutes(artist.minutes)}
+                              </div>
+                            </div>
+                          </button>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="np-card__eyebrow" style={{ marginBottom: 6 }}>
+                    Top Tracks (1-Click Replay)
+                  </div>
+                  <div className="home-list">
+                    {listeningStats.topTracks
+                      .slice(0, statsExpanded ? 10 : 4)
+                      .map((track, idx) => (
+                        <div key={`${track.title}-${track.artist}-${idx}`} className="home-list-item">
+                          <button
+                            type="button"
+                            className="home-list-item__main"
+                            onClick={() => {
+                              if (track.url) {
+                                onOpenUrlInService(track.serviceId, track.url);
+                              } else {
+                                onSearchInService(
+                                  track.serviceId === 'spotify' ? 'spotify' : 'youtube-music',
+                                  `${track.artist} ${track.title}`,
+                                );
+                              }
+                            }}
+                          >
+                            <PlayIcon size={11} />
+                            <div className="home-list-item__text">
+                              <div className="home-list-item__title">{track.title}</div>
+                              <div className="home-list-item__meta">
+                                {track.artist} · {track.plays} plays
+                              </div>
+                            </div>
+                          </button>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              </div>
+
+              {statsExpanded && listeningStats.recentPlays.length > 0 && (
+                <div>
+                  <div className="np-card__eyebrow" style={{ marginBottom: 6 }}>
+                    Recent Play History
+                  </div>
+                  <div className="home-list">
+                    {listeningStats.recentPlays.slice(0, 15).map((entry) => {
+                      const svc = getService(entry.serviceId);
+                      return (
+                        <div key={entry.id} className="home-list-item">
+                          <button
+                            type="button"
+                            className="home-list-item__main"
+                            onClick={() => {
+                              if (entry.url) {
+                                onOpenUrlInService(entry.serviceId, entry.url);
+                              } else {
+                                onSearchInService(entry.serviceId, `${entry.artist} ${entry.title}`);
+                              }
+                            }}
+                          >
+                            <ServiceIcon
+                              icon={svc?.icon ?? 'globe'}
+                              size={14}
+                              color={svc?.accentColor ?? '#E87A3E'}
+                            />
+                            <div className="home-list-item__text">
+                              <div className="home-list-item__title">{entry.title}</div>
+                              <div className="home-list-item__meta">
+                                {entry.artist} · {svc?.shortName ?? entry.serviceId}
+                              </div>
+                            </div>
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
 
         {/* Quick Sleep Timer Strip */}
         <section className="home-sleep-strip">

@@ -1,7 +1,15 @@
 import { DEFAULT_SERVICES } from './services.js';
 import { DEFAULT_POWER_UPS, mergePowerUpsConfig } from './powerUps.js';
+import {
+  DEFAULT_AI_COMPANION_CONFIG,
+  DEFAULT_EQUALIZER_CONFIG,
+  clampDuckLevel,
+  mergeAiCompanionConfig,
+  mergeEqualizerConfig,
+} from './audio.js';
 import type {
   AppSettings,
+  AudioFocusMode,
   ChromeInsets,
   CustomServiceInput,
   PersistedConfig,
@@ -14,7 +22,7 @@ import type {
   WorkspacePreset,
 } from './types.js';
 
-export const APP_VERSION = '1.3.3';
+export const APP_VERSION = '1.4.0';
 export const GITHUB_REPO_OWNER = 'DanHalse';
 export const GITHUB_REPO_NAME = 'omnideck';
 export const GITHUB_RELEASES_URL = `https://github.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases`;
@@ -34,12 +42,17 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoHibernateMinutes: 30,
   confirmBeforeQuitWithAudio: false,
   smartAudioSwitching: true,
+  audioFocusMode: 'pause',
+  audioDuckLevel: 0.15,
+  miniPlayerAutoShowOnMinimize: true,
   hardwareMediaKeys: true,
   adBlockerEnabled: true,
   doNotDisturb: false,
   autoCheckUpdates: true,
   hardwareVideoAcceleration: true,
   powerUps: { ...DEFAULT_POWER_UPS },
+  equalizer: { ...DEFAULT_EQUALIZER_CONFIG, bands: [...DEFAULT_EQUALIZER_CONFIG.bands] },
+  aiCompanion: { ...DEFAULT_AI_COMPANION_CONFIG },
 };
 
 export const DEFAULT_WORKSPACES: WorkspacePreset[] = [
@@ -87,7 +100,12 @@ export function createDefaultConfig(): PersistedConfig {
       secondaryServiceId: 'reddit',
       ratio: 0.5,
     },
-    settings: { ...DEFAULT_SETTINGS, powerUps: { ...DEFAULT_POWER_UPS } },
+    settings: {
+      ...DEFAULT_SETTINGS,
+      powerUps: { ...DEFAULT_POWER_UPS },
+      equalizer: { ...DEFAULT_EQUALIZER_CONFIG, bands: [...DEFAULT_EQUALIZER_CONFIG.bands] },
+      aiCompanion: { ...DEFAULT_AI_COMPANION_CONFIG },
+    },
     workspaces: DEFAULT_WORKSPACES.map((w) => ({ ...w, serviceIds: [...w.serviceIds] })),
     activeWorkspaceId: 'all',
     pinnedFavorites: [],
@@ -187,6 +205,18 @@ export function mergePersistedConfig(raw: unknown): PersistedConfig {
   }
 
   const candidate = raw as Partial<PersistedConfig>;
+  const rawAudioFocus = candidate.settings?.audioFocusMode;
+  const legacySmartSwitch =
+    typeof candidate.settings?.smartAudioSwitching === 'boolean'
+      ? candidate.settings.smartAudioSwitching
+      : DEFAULT_SETTINGS.smartAudioSwitching;
+  const audioFocusMode: AudioFocusMode =
+    rawAudioFocus === 'off' || rawAudioFocus === 'pause' || rawAudioFocus === 'duck'
+      ? rawAudioFocus
+      : legacySmartSwitch
+        ? 'pause'
+        : 'off';
+
   const settings: AppSettings = {
     navPosition: candidate.settings?.navPosition === 'left' ? 'left' : 'top',
     theme: candidate.settings?.theme === 'light' ? 'light' : 'dark',
@@ -233,10 +263,16 @@ export function mergePersistedConfig(raw: unknown): PersistedConfig {
       typeof candidate.settings?.confirmBeforeQuitWithAudio === 'boolean'
         ? candidate.settings.confirmBeforeQuitWithAudio
         : DEFAULT_SETTINGS.confirmBeforeQuitWithAudio,
-    smartAudioSwitching:
-      typeof candidate.settings?.smartAudioSwitching === 'boolean'
-        ? candidate.settings.smartAudioSwitching
-        : DEFAULT_SETTINGS.smartAudioSwitching,
+    smartAudioSwitching: audioFocusMode !== 'off',
+    audioFocusMode,
+    audioDuckLevel:
+      typeof candidate.settings?.audioDuckLevel === 'number'
+        ? clampDuckLevel(candidate.settings.audioDuckLevel)
+        : DEFAULT_SETTINGS.audioDuckLevel,
+    miniPlayerAutoShowOnMinimize:
+      typeof candidate.settings?.miniPlayerAutoShowOnMinimize === 'boolean'
+        ? candidate.settings.miniPlayerAutoShowOnMinimize
+        : DEFAULT_SETTINGS.miniPlayerAutoShowOnMinimize,
     hardwareMediaKeys:
       typeof candidate.settings?.hardwareMediaKeys === 'boolean'
         ? candidate.settings.hardwareMediaKeys
@@ -258,6 +294,8 @@ export function mergePersistedConfig(raw: unknown): PersistedConfig {
         ? candidate.settings.hardwareVideoAcceleration
         : DEFAULT_SETTINGS.hardwareVideoAcceleration,
     powerUps: mergePowerUpsConfig(candidate.settings?.powerUps),
+    equalizer: mergeEqualizerConfig(candidate.settings?.equalizer),
+    aiCompanion: mergeAiCompanionConfig(candidate.settings?.aiCompanion),
   };
 
   let services: ServiceDefinition[] = fallback.services;
@@ -768,12 +806,22 @@ export function recordRecentActivity(
 }
 
 export function serializeConfigForExport(config: PersistedConfig): string {
+  const sanitized: PersistedConfig = {
+    ...config,
+    settings: {
+      ...config.settings,
+      aiCompanion: {
+        ...config.settings.aiCompanion,
+        apiKey: '',
+      },
+    },
+  };
   return JSON.stringify(
     {
       omnideckExport: true,
       exportedAt: new Date().toISOString(),
       appVersion: APP_VERSION,
-      config,
+      config: sanitized,
     },
     null,
     2,

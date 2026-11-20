@@ -177,7 +177,8 @@ export function buildSetVolumeScript(volume: number): string {
             const clamped = Math.min(1, Math.max(0, num));
             this.__odSiteVol = clamped;
             const curScale = typeof window.__omnideckVolumeScale === 'number' ? window.__omnideckVolumeScale : 1;
-            window.__omnideckNativeVolSet.call(this, Math.min(1, Math.max(0, clamped * curScale)));
+            const curDuck = typeof window.__omnideckDuckFactor === 'number' ? window.__omnideckDuckFactor : 1;
+            window.__omnideckNativeVolSet.call(this, Math.min(1, Math.max(0, clamped * curScale * curDuck)));
           }
         });
       }
@@ -188,13 +189,14 @@ export function buildSetVolumeScript(volume: number): string {
         if (!el) return;
         const nativeGet = window.__omnideckNativeVolGet;
         const nativeSet = window.__omnideckNativeVolSet;
+        const curDuck = typeof window.__omnideckDuckFactor === 'number' ? window.__omnideckDuckFactor : 1;
         if (nativeGet && nativeSet) {
           if (typeof el.__odSiteVol !== 'number') {
             el.__odSiteVol = nativeGet.call(el);
           }
-          nativeSet.call(el, Math.min(1, Math.max(0, el.__odSiteVol * scale)));
+          nativeSet.call(el, Math.min(1, Math.max(0, el.__odSiteVol * scale * curDuck)));
         } else if (typeof el.volume === 'number') {
-          el.volume = scale;
+          el.volume = scale * curDuck;
         }
       } catch {}
     };
@@ -216,10 +218,21 @@ export function buildSetVolumeScript(volume: number): string {
 
 /**
  * Reads live MediaSession metadata (track title, artist/channel, album, cover artwork)
- * from Spotify, YouTube, YouTube Music, Twitch, or Audible for OmniDeck's native Media Dock.
+ * plus live playback position (currentTimeSec, durationSec) for synced lyrics & stats.
  */
 export const READ_MEDIA_METADATA_SCRIPT = `(function () {
   try {
+    let currentTimeSec = undefined;
+    let durationSec = undefined;
+    const mediaEls = Array.from(document.querySelectorAll('video, audio'));
+    const activeEl =
+      mediaEls.find((m) => !m.paused && Number.isFinite(m.duration) && m.duration > 0) ||
+      mediaEls.find((m) => Number.isFinite(m.duration) && m.duration > 0 && m.currentTime > 0);
+    if (activeEl) {
+      currentTimeSec = Math.max(0, Number(activeEl.currentTime) || 0);
+      durationSec = Number.isFinite(activeEl.duration) ? Math.max(0, Number(activeEl.duration)) : undefined;
+    }
+
     const ms = navigator.mediaSession && navigator.mediaSession.metadata;
     if (ms && (ms.title || ms.artist)) {
       let artworkUrl = '';
@@ -231,7 +244,20 @@ export const READ_MEDIA_METADATA_SCRIPT = `(function () {
         title: String(ms.title || '').trim(),
         artist: String(ms.artist || '').trim(),
         album: String(ms.album || '').trim(),
-        artworkUrl: artworkUrl
+        artworkUrl: artworkUrl,
+        currentTimeSec,
+        durationSec
+      };
+    }
+
+    if (typeof currentTimeSec === 'number') {
+      return {
+        title: '',
+        artist: '',
+        album: '',
+        artworkUrl: '',
+        currentTimeSec,
+        durationSec
       };
     }
     return null;

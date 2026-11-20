@@ -61,6 +61,19 @@ const api: OmniDeckBridge = {
   triggerPip: (serviceId) => ipcRenderer.invoke('omnideck:trigger-pip', serviceId),
   toggleAlwaysOnTop: () => ipcRenderer.invoke('omnideck:toggle-always-on-top'),
   closeAudibleDock: () => ipcRenderer.invoke('omnideck:close-audible-dock'),
+  updateEqualizer: (patch) => ipcRenderer.invoke('omnideck:update-equalizer', patch),
+
+  getArtistDossier: (input) => ipcRenderer.invoke('omnideck:get-artist-dossier', input),
+  getBandDetails: (bandName) => ipcRenderer.invoke('omnideck:get-band-details', bandName),
+  askMusicAi: (dossier, question) => ipcRenderer.invoke('omnideck:ask-music-ai', dossier, question),
+  testAiConnection: (config) => ipcRenderer.invoke('omnideck:test-ai-connection', config),
+  setNowPlayingHubActive: (active) => ipcRenderer.invoke('omnideck:set-now-playing-active', active),
+
+  toggleMiniPlayer: (open) => ipcRenderer.invoke('omnideck:toggle-mini-player', open),
+  focusMainWindow: () => ipcRenderer.invoke('omnideck:focus-main-window'),
+
+  getListeningStats: () => ipcRenderer.invoke('omnideck:get-listening-stats'),
+  clearListeningStats: () => ipcRenderer.invoke('omnideck:clear-listening-stats'),
 
   windowMinimize: () => ipcRenderer.invoke('omnideck:window-minimize'),
   windowToggleMaximize: () => ipcRenderer.invoke('omnideck:window-toggle-maximize'),

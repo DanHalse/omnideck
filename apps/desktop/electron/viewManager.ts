@@ -15,6 +15,7 @@ import {
   extractBadgeCountFromTitle,
   extractTwitchChannelLogin,
   extractYouTubeVideoId,
+  findActiveLyricIndex,
   isInAppPopupUrl,
   matchServiceForUrl,
   recordRecentActivity,
@@ -28,6 +29,7 @@ import {
   type ChromeInsets,
   type DesktopSnapshot,
   type DrmStatus,
+  type LyricLine,
   type NowPlayingState,
   type PersistedConfig,
   type ServiceDefinition,
@@ -36,6 +38,8 @@ import {
   type UpdateState,
 } from '@omnideck/shared';
 import { shouldBlockNetworkRequest } from './adBlocker.js';
+import { buildDuckFactorScript, buildEqualizerScript } from './audioEngine.js';
+import type { ListeningStatsStore } from './listeningStats.js';
 import { buildMediaControlScript, type MediaControlAction } from './mediaScripts.js';
 import {
   buildNativePolishCss,
@@ -71,6 +75,8 @@ interface MediaMeta {
   artist?: string;
   album?: string;
   artworkUrl?: string;
+  currentTimeSec?: number;
+  durationSec?: number;
 }
 
 interface HibernateSnapshot {
@@ -94,12 +100,14 @@ export class ViewManager {
   private readonly mediaMeta = new Map<string, MediaMeta>();
   private readonly hibernateSnapshots = new Map<string, HibernateSnapshot>();
   private readonly pendingRewindServiceIds = new Set<string>();
+  private readonly duckedServiceIds = new Set<string>();
   private readonly lastSponsorVideoByService = new Map<string, string>();
   private readonly lastTwitchChannel = { login: '' };
   private readonly configuredPartitions = new Set<string>();
   private readonly attachedViewIds = new Set<string>();
   private readonly onSnapshotChanged: (snapshot: DesktopSnapshot) => void;
   private readonly onConfigUpdated: (nextConfig: PersistedConfig) => void;
+  private readonly listeningStats: ListeningStatsStore | null;
 
   private audiblePlayerView: WebContentsView | null = null;
   private audiblePlayerAttached = false;
@@ -109,13 +117,19 @@ export class ViewManager {
   private overlayOpen = false;
   private homeActive = false;
   private alwaysOnTop = false;
+  private miniPlayerOpen = false;
+  private nowPlayingHubActive = false;
   private htmlFullscreenServiceId: string | null = null;
   private chromeInsets: ChromeInsets;
 
   private autoHibernateInterval: ReturnType<typeof setInterval> | null = null;
   private metadataInterval: ReturnType<typeof setInterval> | null = null;
+  private fastProgressInterval: ReturnType<typeof setInterval> | null = null;
   private sleepTimerTick: ReturnType<typeof setInterval> | null = null;
   private sleepTimerState: SleepTimerState = { active: false, endsAt: null, durationMinutes: 0 };
+
+  private activeLyricsTrackKey = '';
+  private activeLyricLines: LyricLine[] = [];
 
   private lastNowPlayingServiceId: string | null = null;
   private autoPausedServiceId: string | null = null;
@@ -132,6 +146,7 @@ export class ViewManager {
     initialUpdateState: UpdateState,
     onSnapshotChanged: (snapshot: DesktopSnapshot) => void,
     onConfigUpdated: (nextConfig: PersistedConfig) => void,
+    listeningStats: ListeningStatsStore | null = null,
   ) {
     this.mainWindow = mainWindow;
     this.config = initialConfig;
@@ -139,6 +154,7 @@ export class ViewManager {
     this.updateState = initialUpdateState;
     this.onSnapshotChanged = onSnapshotChanged;
     this.onConfigUpdated = onConfigUpdated;
+    this.listeningStats = listeningStats;
     this.chromeInsets = this.defaultInsetsFor(initialConfig);
 
     for (const svc of initialConfig.services) {
@@ -151,6 +167,29 @@ export class ViewManager {
 
   setUpdateState(next: UpdateState): void {
     this.updateState = next;
+    this.emitSnapshot();
+  }
+
+  setMiniPlayerOpen(open: boolean): void {
+    if (this.miniPlayerOpen === open) return;
+    this.miniPlayerOpen = open;
+    this.syncFastProgressLoop();
+    this.emitSnapshot();
+  }
+
+  setNowPlayingHubActive(active: boolean): void {
+    if (this.nowPlayingHubActive === active) return;
+    this.nowPlayingHubActive = active;
+    this.syncFastProgressLoop();
+    if (active) {
+      const npId = this.resolveMediaTargetId();
+      if (npId) void this.pollMediaMetadata(npId);
+    }
+  }
+
+  setActiveLyrics(trackKey: string, lines: LyricLine[]): void {
+    this.activeLyricsTrackKey = trackKey;
+    this.activeLyricLines = lines;
     this.emitSnapshot();
   }
 
@@ -185,6 +224,7 @@ export class ViewManager {
       totalBlockedRequests: this.totalBlockedRequests,
       totalMemoryMb: this.totalMemoryMb,
       audibleDockOpen: Boolean(this.audiblePlayerView && !this.audiblePlayerView.webContents.isDestroyed()),
+      miniPlayerOpen: this.miniPlayerOpen,
       toastMessage: this.toastMessage,
     };
   }
@@ -300,6 +340,9 @@ export class ViewManager {
     const prevChrome = this.config.settings.appChromeMode;
     const prevBgAudio = this.config.settings.backgroundAudioEnabled;
     const prevPowerUps = this.config.settings.powerUps;
+    const prevEq = this.config.settings.equalizer;
+    const prevAudioFocus = this.config.settings.audioFocusMode;
+    const prevDuckLevel = this.config.settings.audioDuckLevel;
     this.config = nextConfig;
 
     if (prevNav !== nextConfig.settings.navPosition || prevChrome !== nextConfig.settings.appChromeMode) {
@@ -374,6 +417,22 @@ export class ViewManager {
       // If user disabled Audible docked player while open, close dock cleanly
       if (!nextConfig.settings.powerUps.audibleDockCloudPlayer && this.audiblePlayerView) {
         void this.closeAudibleDock();
+      }
+    }
+
+    if (JSON.stringify(prevEq) !== JSON.stringify(nextConfig.settings.equalizer)) {
+      this.applyEqualizerToAllViews();
+    }
+
+    if (prevAudioFocus !== nextConfig.settings.audioFocusMode && nextConfig.settings.audioFocusMode !== 'duck') {
+      this.restoreAllDuckedAudio();
+    } else if (
+      nextConfig.settings.audioFocusMode === 'duck' &&
+      prevDuckLevel !== nextConfig.settings.audioDuckLevel &&
+      this.duckedServiceIds.size > 0
+    ) {
+      for (const duckId of this.duckedServiceIds) {
+        this.applyDuckFactorToView(duckId, nextConfig.settings.audioDuckLevel, 240);
       }
     }
 
@@ -880,6 +939,10 @@ export class ViewManager {
       clearInterval(this.metadataInterval);
       this.metadataInterval = null;
     }
+    if (this.fastProgressInterval) {
+      clearInterval(this.fastProgressInterval);
+      this.fastProgressInterval = null;
+    }
     if (this.sleepTimerTick) {
       clearInterval(this.sleepTimerTick);
       this.sleepTimerTick = null;
@@ -892,6 +955,7 @@ export class ViewManager {
       clearTimeout(this.toastTimer);
       this.toastTimer = null;
     }
+    this.listeningStats?.flush();
     this.destroyAudibleDock();
     for (const id of [...this.views.keys()]) {
       this.destroyView(id);
@@ -916,6 +980,66 @@ export class ViewManager {
     }
   }
 
+  private applyDuckFactorToView(serviceId: string, factor: number, rampMs = 380): void {
+    const view = this.views.get(serviceId);
+    if (view && !view.webContents.isDestroyed()) {
+      void view.webContents
+        .executeJavaScript(buildDuckFactorScript(factor, rampMs), true)
+        .catch(() => {});
+    }
+    if (
+      serviceId === 'audible' &&
+      this.audiblePlayerView &&
+      !this.audiblePlayerView.webContents.isDestroyed()
+    ) {
+      void this.audiblePlayerView.webContents
+        .executeJavaScript(buildDuckFactorScript(factor, rampMs), true)
+        .catch(() => {});
+    }
+  }
+
+  private applyEqualizerToView(service: ServiceDefinition, view: WebContentsView): void {
+    // Skip DRM-locked services (Spotify / Audible EME) so Chromium never silences Widevine audio
+    if (service.requiresDrm) return;
+    const wc = view.webContents;
+    if (wc.isDestroyed()) return;
+    void wc
+      .executeJavaScript(buildEqualizerScript(this.config.settings.equalizer), true)
+      .catch(() => {});
+  }
+
+  private applyEqualizerToAllViews(): void {
+    for (const svc of this.config.services) {
+      const view = this.views.get(svc.id);
+      if (view && !view.webContents.isDestroyed()) {
+        this.applyEqualizerToView(svc, view);
+      }
+    }
+  }
+
+  private restoreAllDuckedAudio(): void {
+    if (this.duckedServiceIds.size === 0) return;
+    for (const id of [...this.duckedServiceIds]) {
+      this.applyDuckFactorToView(id, 1.0, 480);
+    }
+    this.duckedServiceIds.clear();
+  }
+
+  private maybeRestoreDuckedAudio(): void {
+    if (this.duckedServiceIds.size === 0) return;
+    let hasCompetingForegroundAudio = false;
+    for (const [id, rt] of this.runtime.entries()) {
+      if (this.duckedServiceIds.has(id)) continue;
+      if (rt.mounted && rt.audible && !rt.muted) {
+        hasCompetingForegroundAudio = true;
+        break;
+      }
+    }
+    if (!hasCompetingForegroundAudio) {
+      this.restoreAllDuckedAudio();
+    }
+  }
+
   private resolveMediaTargetId(): string | null {
     for (const [id, rt] of this.runtime.entries()) {
       if (rt.mounted && rt.audible && !rt.muted) {
@@ -933,10 +1057,29 @@ export class ViewManager {
 
   private computeNowPlaying(): NowPlayingState {
     let targetId: string | null = null;
-    for (const [id, rt] of this.runtime.entries()) {
-      if (rt.mounted && rt.audible) {
-        targetId = id;
+    // Prefer an audible music service when available, otherwise any audible service
+    const musicFirst = ['youtube-music', 'spotify', 'audible'];
+    for (const mId of musicFirst) {
+      const rt = this.runtime.get(mId);
+      if (rt?.mounted && rt.audible && !this.duckedServiceIds.has(mId)) {
+        targetId = mId;
         break;
+      }
+    }
+    if (!targetId) {
+      for (const [id, rt] of this.runtime.entries()) {
+        if (rt.mounted && rt.audible && !this.duckedServiceIds.has(id)) {
+          targetId = id;
+          break;
+        }
+      }
+    }
+    if (!targetId) {
+      for (const [id, rt] of this.runtime.entries()) {
+        if (rt.mounted && rt.audible) {
+          targetId = id;
+          break;
+        }
       }
     }
 
@@ -955,39 +1098,71 @@ export class ViewManager {
         muted: false,
         volume: 1.0,
         autoPausedServiceId: this.autoPausedServiceId,
+        duckedServiceIds: [...this.duckedServiceIds],
       };
     }
 
     const rt = this.runtime.get(targetId)!;
     const svc = this.findService(targetId);
     const meta = this.mediaMeta.get(targetId);
+    const title = meta?.title || rt.pageTitle || svc?.name || targetId;
+    const artist = meta?.artist || svc?.name;
+
+    let currentLyricLine: string | undefined;
+    if (
+      this.activeLyricLines.length > 0 &&
+      typeof meta?.currentTimeSec === 'number' &&
+      this.activeLyricsTrackKey === `${targetId}::${title.toLowerCase()}`
+    ) {
+      const idx = findActiveLyricIndex(this.activeLyricLines, meta.currentTimeSec);
+      if (idx >= 0) {
+        currentLyricLine = this.activeLyricLines[idx].text;
+      }
+    }
 
     return {
       serviceId: targetId,
       playing: rt.audible,
-      title: meta?.title || rt.pageTitle || svc?.name || targetId,
-      artist: meta?.artist || svc?.name,
+      title,
+      artist,
       album: meta?.album,
       artworkUrl: meta?.artworkUrl,
       muted: rt.muted,
       volume: rt.volume,
       autoPausedServiceId: this.autoPausedServiceId,
+      currentTimeSec: meta?.currentTimeSec,
+      durationSec: meta?.durationSec,
+      currentLyricLine,
+      duckedServiceIds: [...this.duckedServiceIds],
     };
   }
 
   private handleSmartAudioSwitching(startedServiceId: string): void {
-    if (!this.config.settings.smartAudioSwitching) return;
+    const mode = this.config.settings.audioFocusMode;
+    if (mode === 'off') return;
+
+    // If the user started a previously ducked tab, bring it back to full volume
+    if (this.duckedServiceIds.has(startedServiceId)) {
+      this.duckedServiceIds.delete(startedServiceId);
+      this.applyDuckFactorToView(startedServiceId, 1.0, 260);
+    }
 
     for (const [otherId, otherRt] of this.runtime.entries()) {
       if (otherId === startedServiceId) continue;
       if (!otherRt.mounted || !otherRt.audible || otherRt.muted) continue;
 
-      const otherWc = this.getMediaWebContents(otherId);
-      if (otherWc) {
-        this.autoPausedServiceId = otherId;
-        void otherWc
-          .executeJavaScript(buildMediaControlScript('pause'), true)
-          .catch(() => {});
+      if (mode === 'duck') {
+        const duckLevel = this.config.settings.audioDuckLevel ?? 0.15;
+        this.duckedServiceIds.add(otherId);
+        this.applyDuckFactorToView(otherId, duckLevel, 380);
+      } else if (mode === 'pause') {
+        const otherWc = this.getMediaWebContents(otherId);
+        if (otherWc) {
+          this.autoPausedServiceId = otherId;
+          void otherWc
+            .executeJavaScript(buildMediaControlScript('pause'), true)
+            .catch(() => {});
+        }
       }
     }
   }
@@ -1393,6 +1568,9 @@ export class ViewManager {
     wc.on('did-finish-load', () => {
       if (wc.isDestroyed()) return;
       this.applyPowerUpsToView(service, view);
+      if (this.config.settings.equalizer.enabled) {
+        this.applyEqualizerToView(service, view);
+      }
 
       const rt = this.runtime.get(service.id);
       if (rt && rt.volume < 0.99) {
@@ -1478,6 +1656,7 @@ export class ViewManager {
         service.id === 'audible' &&
         Boolean(this.audiblePlayerView && !this.audiblePlayerView.webContents.isDestroyed() && this.audiblePlayerView.webContents.isCurrentlyAudible());
       rt.audible = wc.isCurrentlyAudible() || dockAudible;
+      this.maybeRestoreDuckedAudio();
       this.emitSnapshot();
     });
 
@@ -1611,7 +1790,7 @@ export class ViewManager {
     });
   }
 
-  private async pollMediaMetadata(serviceId: string): Promise<void> {
+  private async pollMediaMetadata(serviceId: string, emitTimeUpdates = false): Promise<void> {
     const wc = this.getMediaWebContents(serviceId);
     if (!wc) return;
     try {
@@ -1620,14 +1799,30 @@ export class ViewManager {
         true,
       )) as MediaMeta | null;
 
+      if (!result) return;
       const prev = this.mediaMeta.get(serviceId);
-      if (
-        result &&
-        (result.title !== prev?.title ||
-          result.artist !== prev?.artist ||
-          result.artworkUrl !== prev?.artworkUrl)
-      ) {
-        this.mediaMeta.set(serviceId, result);
+      const merged: MediaMeta = {
+        title: result.title || prev?.title || '',
+        artist: result.artist || prev?.artist,
+        album: result.album || prev?.album,
+        artworkUrl: result.artworkUrl || prev?.artworkUrl,
+        currentTimeSec:
+          typeof result.currentTimeSec === 'number' ? result.currentTimeSec : prev?.currentTimeSec,
+        durationSec:
+          typeof result.durationSec === 'number' ? result.durationSec : prev?.durationSec,
+      };
+
+      const metaChanged =
+        merged.title !== prev?.title ||
+        merged.artist !== prev?.artist ||
+        merged.artworkUrl !== prev?.artworkUrl;
+      const timeChanged =
+        emitTimeUpdates &&
+        typeof merged.currentTimeSec === 'number' &&
+        Math.abs((merged.currentTimeSec ?? 0) - (prev?.currentTimeSec ?? -99)) >= 0.75;
+
+      if (metaChanged || timeChanged) {
+        this.mediaMeta.set(serviceId, merged);
         this.emitSnapshot();
       }
     } catch {
@@ -1785,17 +1980,44 @@ export class ViewManager {
       }
     }, 60_000);
 
-    // Low-overhead fallback metadata sync (event-driven triggers handle instant updates; 15s safety net only when visible & playing)
+    // Low-overhead 15s metadata & local listening stats loop (runs even when minimized so stats stay accurate)
     this.metadataInterval = setInterval(() => {
-      if (this.mainWindow.isDestroyed() || this.mainWindow.isMinimized()) return;
-      const npId = this.resolveMediaTargetId();
-      if (npId) {
-        const rt = this.runtime.get(npId);
-        if (rt?.mounted && rt.audible) {
-          void this.pollMediaMetadata(npId);
-        }
+      if (this.mainWindow.isDestroyed()) return;
+      for (const [id, rt] of this.runtime.entries()) {
+        if (!rt.mounted || !rt.audible || rt.muted) continue;
+        void this.pollMediaMetadata(id, false).then(() => {
+          const meta = this.mediaMeta.get(id);
+          const svc = this.findService(id);
+          this.listeningStats?.recordPlaybackTick({
+            serviceId: id,
+            title: meta?.title || rt.pageTitle || svc?.name || id,
+            artist: meta?.artist || svc?.name,
+            album: meta?.album,
+            artworkUrl: meta?.artworkUrl,
+            url: rt.currentUrl,
+            deltaSec: 15,
+          });
+        });
       }
     }, 15_000);
+  }
+
+  private syncFastProgressLoop(): void {
+    const shouldRun = this.nowPlayingHubActive || this.miniPlayerOpen;
+    if (shouldRun && !this.fastProgressInterval) {
+      this.fastProgressInterval = setInterval(() => {
+        if (this.mainWindow.isDestroyed()) return;
+        const npId = this.resolveMediaTargetId();
+        if (!npId) return;
+        const rt = this.runtime.get(npId);
+        if (rt?.mounted && rt.audible) {
+          void this.pollMediaMetadata(npId, true);
+        }
+      }, 1000);
+    } else if (!shouldRun && this.fastProgressInterval) {
+      clearInterval(this.fastProgressInterval);
+      this.fastProgressInterval = null;
+    }
   }
 
   private emitSnapshot(): DesktopSnapshot {

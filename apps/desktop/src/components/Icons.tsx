@@ -370,3 +370,52 @@ export function WindowRestoreIcon({ size = 12 }: IconProps) {
     </svg>
   );
 }
+
+export function SparklesIcon({ size = 14 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 3l1.9 5.3L19 10.2l-5.1 1.9L12 17.5l-1.9-5.4L5 10.2l5.1-1.9L12 3Z" />
+      <path d="M5 19l.9 2.1L8 22l-2.1.9L5 25" opacity="0" />
+      <path d="M19 16l.9 2.1L22 19l-2.1.9L19 22l-.9-2.1L16 19l2.1-.9L19 16Z" />
+    </svg>
+  );
+}
+
+export function ExpandStageIcon({ size = 14 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M15 3h6v6" />
+      <path d="M9 21H3v-6" />
+      <path d="m21 3-7 7" />
+      <path d="m3 21 7-7" />
+    </svg>
+  );
+}
+
+export function CollapseStageIcon({ size = 14 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 14h6v6" />
+      <path d="M20 10h-6V4" />
+      <path d="m14 10 7-7" />
+      <path d="m3 21 7-7" />
+    </svg>
+  );
+}
+
+export function MiniPlayerIcon({ size = 14 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="18" height="16" rx="2.5" />
+      <rect x="12" y="11" width="7" height="6" rx="1.2" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+export function FlameIcon({ size = 14 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z" />
+    </svg>
+  );
+}

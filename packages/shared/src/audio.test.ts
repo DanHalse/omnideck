@@ -1,0 +1,139 @@
+import { describe, expect, it } from 'vitest';
+import {
+  cleanTrackAndArtist,
+  computeListeningStatsSummary,
+  createDefaultConfig,
+  findActiveLyricIndex,
+  mergeAiCompanionConfig,
+  mergeEqualizerConfig,
+  mergePersistedConfig,
+  parseLrcLyrics,
+  serializeConfigForExport,
+  type ListeningEntry,
+} from './index.js';
+
+describe('v1.4.0 audio, lyrics, AI & listening stats utilities', () => {
+  it('cleans YouTube Music / Spotify track and artist noise accurately', () => {
+    expect(cleanTrackAndArtist('Everlong (Official HD Video)', 'Foo Fighters - Topic')).toEqual({
+      track: 'Everlong',
+      artist: 'Foo Fighters',
+    });
+
+    expect(cleanTrackAndArtist('Tame Impala - Let It Happen [Remastered 2020]', 'YouTube Music')).toEqual({
+      track: 'Let It Happen',
+      artist: 'Tame Impala',
+    });
+
+    expect(cleanTrackAndArtist('Blinding Lights (Official Audio)', 'The WeekndVEVO')).toEqual({
+      track: 'Blinding Lights',
+      artist: 'The Weeknd',
+    });
+  });
+
+  it('parses LRC timestamped lyrics and resolves active lyric line index', () => {
+    const lrc = [
+      '[00:12.50] First line of the song',
+      '[00:25.00] Second line rises',
+      '[01:02.150] Chorus hits hard',
+    ].join('\n');
+
+    const lines = parseLrcLyrics(lrc);
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toEqual({ timeSec: 12.5, text: 'First line of the song' });
+    expect(lines[2].timeSec).toBeCloseTo(62.15, 2);
+
+    expect(findActiveLyricIndex(lines, 5)).toBe(-1);
+    expect(findActiveLyricIndex(lines, 13)).toBe(0);
+    expect(findActiveLyricIndex(lines, 30)).toBe(1);
+    expect(findActiveLyricIndex(lines, 70)).toBe(2);
+  });
+
+  it('computes private local listening stats summary with daily streak & rankings', () => {
+    const now = new Date('2026-11-20T18:00:00Z').getTime();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const entries: ListeningEntry[] = [
+      {
+        id: '1',
+        serviceId: 'youtube-music',
+        title: 'Do I Wanna Know?',
+        artist: 'Arctic Monkeys',
+        startedAt: now - 10_000,
+        durationSec: 270,
+      },
+      {
+        id: '2',
+        serviceId: 'youtube-music',
+        title: 'Do I Wanna Know?',
+        artist: 'Arctic Monkeys',
+        startedAt: now - dayMs,
+        durationSec: 270,
+      },
+      {
+        id: '3',
+        serviceId: 'spotify',
+        title: 'Nude',
+        artist: 'Radiohead',
+        startedAt: now - 2 * dayMs,
+        durationSec: 240,
+      },
+      {
+        id: '4',
+        serviceId: 'youtube-music',
+        title: 'Skipped quickly',
+        artist: 'Ignored',
+        startedAt: now - 5_000,
+        durationSec: 4,
+      },
+    ];
+
+    const summary = computeListeningStatsSummary(entries, now);
+    expect(summary.totalPlays).toBe(3);
+    expect(summary.totalMinutes).toBe(13);
+    expect(summary.streakDays).toBe(3);
+    expect(summary.topArtists[0].name).toBe('Arctic Monkeys');
+    expect(summary.topArtists[0].plays).toBe(2);
+    expect(summary.topTracks[0].title).toBe('Do I Wanna Know?');
+    expect(summary.byService[0].serviceId).toBe('youtube-music');
+  });
+
+  it('clamps 10-band EQ values and merges AI companion defaults safely', () => {
+    const eq = mergeEqualizerConfig({
+      enabled: true,
+      preset: 'custom',
+      preampDb: 99,
+      bands: [20, -30, 3.2],
+    });
+    expect(eq.preampDb).toBe(12);
+    expect(eq.bands).toHaveLength(10);
+    expect(eq.bands[0]).toBe(12);
+    expect(eq.bands[1]).toBe(-12);
+    expect(eq.bands[2]).toBe(3);
+    expect(eq.bands[9]).toBe(0);
+
+    const ai = mergeAiCompanionConfig({
+      provider: 'gemini',
+      apiKey: '  secret-key  ',
+      ollamaBaseUrl: 'javascript:alert(1)',
+    });
+    expect(ai.provider).toBe('gemini');
+    expect(ai.apiKey).toBe('secret-key');
+    expect(ai.model).toBe('gemini-2.5-flash');
+    expect(ai.ollamaBaseUrl).toBe('http://localhost:11434');
+  });
+
+  it('migrates legacy smartAudioSwitching to audioFocusMode and strips AI API keys on export', () => {
+    const migratedOff = mergePersistedConfig({
+      settings: { smartAudioSwitching: false } as unknown as ReturnType<typeof createDefaultConfig>['settings'],
+    });
+    expect(migratedOff.settings.audioFocusMode).toBe('off');
+
+    const cfg = createDefaultConfig();
+    cfg.settings.aiCompanion.provider = 'openai';
+    cfg.settings.aiCompanion.apiKey = 'sk-super-secret';
+    const exported = JSON.parse(serializeConfigForExport(cfg)) as {
+      config: ReturnType<typeof createDefaultConfig>;
+    };
+    expect(exported.config.settings.aiCompanion.apiKey).toBe('');
+    expect(exported.config.settings.aiCompanion.provider).toBe('openai');
+  });
+});

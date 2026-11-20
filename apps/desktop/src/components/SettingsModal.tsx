@@ -1,19 +1,24 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type {
-  AppSettings,
-  DrmStatus,
-  PowerUpsConfig,
-  ServiceDefinition,
-  ServiceRuntimeState,
-  UpdateState,
-  WorkspacePreset,
+import {
+  AI_PROVIDER_DEFAULT_MODELS,
+  type AiCompanionConfig,
+  type AiProviderId,
+  type AppSettings,
+  type AudioFocusMode,
+  type DrmStatus,
+  type PowerUpsConfig,
+  type ServiceDefinition,
+  type ServiceRuntimeState,
+  type UpdateState,
+  type WorkspacePreset,
 } from '@omnideck/shared';
 import { CloseIcon, DownloadCloudIcon, TrashIcon } from './Icons';
 import { ServiceIcon } from './ServiceIcon';
 
-type SettingsTab = 'general' | 'powerups' | 'performance' | 'workspaces';
+export type SettingsTab = 'general' | 'powerups' | 'ai' | 'performance' | 'workspaces';
 
 interface SettingsModalProps {
+  initialTab?: SettingsTab;
   settings: AppSettings;
   services: ServiceDefinition[];
   runtime: Record<string, ServiceRuntimeState>;
@@ -26,6 +31,7 @@ interface SettingsModalProps {
   onClose: () => void;
   onUpdateSettings: (patch: Partial<AppSettings>) => Promise<void>;
   onUpdatePowerUps: (patch: Partial<PowerUpsConfig>) => Promise<void>;
+  onTestAiConnection: (config: AiCompanionConfig) => Promise<{ ok: boolean; message: string }>;
   onRefreshMemory: () => Promise<void>;
   onHibernateService: (serviceId: string) => Promise<void>;
   onHibernateInactive: () => Promise<void>;
@@ -52,6 +58,7 @@ const HIBERNATE_OPTIONS = [
 ];
 
 export function SettingsModal({
+  initialTab = 'general',
   settings,
   services,
   runtime,
@@ -64,6 +71,7 @@ export function SettingsModal({
   onClose,
   onUpdateSettings,
   onUpdatePowerUps,
+  onTestAiConnection,
   onRefreshMemory,
   onHibernateService,
   onHibernateInactive,
@@ -81,14 +89,21 @@ export function SettingsModal({
   onCopySyncJson,
   onImportSyncJson,
 }: SettingsModalProps) {
-  const [tab, setTab] = useState<SettingsTab>('general');
+  const [tab, setTab] = useState<SettingsTab>(initialTab);
   const [clearedId, setClearedId] = useState<string | null>(null);
   const [workspaceName, setWorkspaceName] = useState('');
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [pasteJsonOpen, setPasteJsonOpen] = useState(false);
   const [pasteJsonValue, setPasteJsonValue] = useState('');
+  const [aiDraft, setAiDraft] = useState<AiCompanionConfig>(settings.aiCompanion);
+  const [aiTestResult, setAiTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [aiTesting, setAiTesting] = useState(false);
 
   const pu = settings.powerUps;
+
+  useEffect(() => {
+    setAiDraft(settings.aiCompanion);
+  }, [settings.aiCompanion]);
 
   // Refresh live per-service RAM metrics whenever Performance tab is open
   useEffect(() => {
@@ -218,6 +233,16 @@ export function SettingsModal({
               onClick={() => setTab('powerups')}
             >
               Power-Ups
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'ai'}
+              className={`segmented__btn ${tab === 'ai' ? 'segmented__btn--active' : ''}`}
+              style={{ flex: 1 }}
+              onClick={() => setTab('ai')}
+            >
+              AI Companion
             </button>
             <button
               type="button"
@@ -449,11 +474,41 @@ export function SettingsModal({
               <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <h3 className="section-label">Media, Audio &amp; Privacy Shield</h3>
 
+                <div className="setting-row">
+                  <div>
+                    <div className="setting-row__title">Smart Audio Focus</div>
+                    <div className="setting-row__desc">
+                      Choose whether playing a video/stream pauses background music or smoothly ducks it to {Math.round(settings.audioDuckLevel * 100)}%.
+                    </div>
+                  </div>
+                  <div className="segmented" role="group" aria-label="Smart audio focus mode">
+                    {(
+                      [
+                        ['off', 'Off'],
+                        ['pause', 'Pause'],
+                        ['duck', 'Duck'],
+                      ] as Array<[AudioFocusMode, string]>
+                    ).map(([mode, label]) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        className={`segmented__btn ${settings.audioFocusMode === mode ? 'segmented__btn--active' : ''}`}
+                        onClick={() => void onUpdateSettings({ audioFocusMode: mode })}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 {renderToggleRow(
-                  'Smart Audio Switching',
-                  'Automatically pauses Spotify, Audible, or YT Music when you play a YouTube video or Twitch stream.',
-                  settings.smartAudioSwitching,
-                  () => void onUpdateSettings({ smartAudioSwitching: !settings.smartAudioSwitching }),
+                  'Auto-Show Floating Mini-Player on Minimize',
+                  'Pops up the compact always-on-top Mini-Player HUD with synced lyrics when OmniDeck minimizes during playback.',
+                  settings.miniPlayerAutoShowOnMinimize,
+                  () =>
+                    void onUpdateSettings({
+                      miniPlayerAutoShowOnMinimize: !settings.miniPlayerAutoShowOnMinimize,
+                    }),
                 )}
 
                 {renderToggleRow(
@@ -497,7 +552,11 @@ export function SettingsModal({
                     <kbd>Ctrl + 0</kbd>
                   </div>
                   <div className="kbd-item">
-                    <span>Audio Mixer &amp; Sleep Timer</span>
+                    <span>AI Artist &amp; Discovery Hub</span>
+                    <kbd>Ctrl + Shift + N</kbd>
+                  </div>
+                  <div className="kbd-item">
+                    <span>Audio Suite (Mixer &amp; 10-Band EQ)</span>
                     <kbd>Ctrl + Shift + V</kbd>
                   </div>
                   <div className="kbd-item">
@@ -529,6 +588,145 @@ export function SettingsModal({
                     <kbd>Ctrl + Shift + P</kbd>
                   </div>
                 </div>
+              </section>
+            </>
+          )}
+
+          {tab === 'ai' && (
+            <>
+              <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <h3 className="section-label">AI Music Discovery &amp; Now Playing Companion</h3>
+                <div className="setting-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
+                  <div>
+                    <div className="setting-row__title">AI Provider (Optional Enhancement)</div>
+                    <div className="setting-row__desc">
+                      Free open APIs (MusicBrainz, Wikipedia, Deezer &amp; LRCLIB synced lyrics) always work with zero keys.
+                      Connect an AI provider to add song backstories, tailored &quot;why these bands match&quot; write-ups, and interactive Q&amp;A.
+                    </div>
+                  </div>
+                  <div className="segmented" role="group" aria-label="AI provider" style={{ flexWrap: 'wrap' }}>
+                    {(
+                      [
+                        ['none', 'Free Only'],
+                        ['gemini', 'Gemini'],
+                        ['openai', 'OpenAI'],
+                        ['anthropic', 'Claude'],
+                        ['ollama', 'Local Ollama'],
+                      ] as Array<[AiProviderId, string]>
+                    ).map(([id, label]) => (
+                      <button
+                        key={id}
+                        type="button"
+                        className={`segmented__btn ${aiDraft.provider === id ? 'segmented__btn--active' : ''}`}
+                        style={{ flex: 1 }}
+                        onClick={() => {
+                          const next: AiCompanionConfig = {
+                            ...aiDraft,
+                            provider: id,
+                            model: AI_PROVIDER_DEFAULT_MODELS[id] || aiDraft.model,
+                          };
+                          setAiDraft(next);
+                          setAiTestResult(null);
+                          void onUpdateSettings({ aiCompanion: next });
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {aiDraft.provider !== 'none' && (
+                  <>
+                    {aiDraft.provider !== 'ollama' ? (
+                      <div className="setting-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
+                        <label className="setting-row__title" htmlFor="ai-api-key">
+                          {aiDraft.provider === 'gemini'
+                            ? 'Google Gemini API Key'
+                            : aiDraft.provider === 'openai'
+                              ? 'OpenAI API Key'
+                              : 'Anthropic Claude API Key'}
+                        </label>
+                        <input
+                          id="ai-api-key"
+                          type="password"
+                          className="text-input"
+                          placeholder="Paste your API key (stored locally only; excluded from config exports)"
+                          value={aiDraft.apiKey}
+                          onChange={(e) => setAiDraft({ ...aiDraft, apiKey: e.target.value })}
+                          onBlur={() => void onUpdateSettings({ aiCompanion: aiDraft })}
+                        />
+                      </div>
+                    ) : (
+                      <div className="setting-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
+                        <label className="setting-row__title" htmlFor="ai-ollama-url">
+                          Local Ollama Endpoint
+                        </label>
+                        <input
+                          id="ai-ollama-url"
+                          type="text"
+                          className="text-input"
+                          placeholder="http://localhost:11434"
+                          value={aiDraft.ollamaBaseUrl}
+                          onChange={(e) => setAiDraft({ ...aiDraft, ollamaBaseUrl: e.target.value })}
+                          onBlur={() => void onUpdateSettings({ aiCompanion: aiDraft })}
+                        />
+                      </div>
+                    )}
+
+                    <div className="setting-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
+                      <label className="setting-row__title" htmlFor="ai-model">
+                        Model ID
+                      </label>
+                      <input
+                        id="ai-model"
+                        type="text"
+                        className="text-input"
+                        placeholder={AI_PROVIDER_DEFAULT_MODELS[aiDraft.provider]}
+                        value={aiDraft.model}
+                        onChange={(e) => setAiDraft({ ...aiDraft, model: e.target.value })}
+                        onBlur={() => void onUpdateSettings({ aiCompanion: aiDraft })}
+                      />
+                    </div>
+
+                    {renderToggleRow(
+                      'Auto-Enrich Every Playing Track',
+                      'Automatically generates Track Context & "Why you\'ll like these bands" notes when a song starts (cached locally for 7 days).',
+                      aiDraft.autoEnrich,
+                      () => {
+                        const next = { ...aiDraft, autoEnrich: !aiDraft.autoEnrich };
+                        setAiDraft(next);
+                        void onUpdateSettings({ aiCompanion: next });
+                      },
+                    )}
+
+                    <div className="setting-row">
+                      <div>
+                        <div className="setting-row__title">Verify AI Connection</div>
+                        <div className="setting-row__desc">
+                          {aiTestResult
+                            ? aiTestResult.message
+                            : 'Save settings and test your provider endpoint.'}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="pill-btn pill-btn--primary"
+                        disabled={aiTesting}
+                        onClick={async () => {
+                          setAiTesting(true);
+                          setAiTestResult(null);
+                          await onUpdateSettings({ aiCompanion: aiDraft });
+                          const res = await onTestAiConnection(aiDraft);
+                          setAiTestResult(res);
+                          setAiTesting(false);
+                        }}
+                      >
+                        {aiTesting ? 'Testing…' : 'Save & Test'}
+                      </button>
+                    </div>
+                  </>
+                )}
               </section>
             </>
           )}

@@ -44,6 +44,10 @@ interface CommandPaletteProps {
   onLikeCurrentTrack: () => void;
   onCloseAudibleDock: () => void;
   onOpenMixer: () => void;
+  onOpenEqualizer: () => void;
+  onToggleNowPlayingDrawer: () => void;
+  onOpenNowPlayingStage: () => void;
+  onToggleMiniPlayer: () => void;
   onSetSleepTimer: (minutes: number) => void;
   onHibernateInactive: () => void;
   onHibernateHeavyTabs: () => void;
@@ -77,6 +81,10 @@ export function CommandPalette({
   onLikeCurrentTrack,
   onCloseAudibleDock,
   onOpenMixer,
+  onOpenEqualizer,
+  onToggleNowPlayingDrawer,
+  onOpenNowPlayingStage,
+  onToggleMiniPlayer,
   onSetSleepTimer,
   onHibernateInactive,
   onHibernateHeavyTabs,
@@ -216,10 +224,39 @@ export function CommandPalette({
           ]
         : []),
       {
+        id: 'cmd-artist-hub',
+        group: 'Actions',
+        title: 'Toggle AI Artist & Discovery Hub Drawer',
+        subtitle: 'Artist bio, similar bands, synced lyrics & AI Q&A alongside your music',
+        shortcut: 'Ctrl+Shift+N',
+        run: onToggleNowPlayingDrawer,
+      },
+      {
+        id: 'cmd-now-playing-stage',
+        group: 'Actions',
+        title: 'Open Full-Screen Ambient Now Playing Stage',
+        subtitle: 'Immersive album-art backdrop with synced lyrics & artist discovery',
+        run: onOpenNowPlayingStage,
+      },
+      {
+        id: 'cmd-mini-player',
+        group: 'Actions',
+        title: 'Toggle Floating Mini-Player HUD',
+        subtitle: 'Always-on-top compact desktop widget with live synced lyric line',
+        run: onToggleMiniPlayer,
+      },
+      {
+        id: 'cmd-eq',
+        group: 'Actions',
+        title: 'Open 10-Band Equalizer & Presets',
+        subtitle: 'Bass Boost, Rock, Vocal/Podcast, Late Night & custom curves',
+        run: onOpenEqualizer,
+      },
+      {
         id: 'cmd-mixer',
         group: 'Actions',
-        title: 'Open Audio Mixer & Sleep Timer',
-        subtitle: 'Independent volume sliders per service',
+        title: 'Open Audio Suite — Mixer, Smart Ducking & Sleep Timer',
+        subtitle: 'Independent volume sliders, Smart Audio Focus & 10-band EQ',
         shortcut: 'Ctrl+Shift+V',
         run: onOpenMixer,
       },
