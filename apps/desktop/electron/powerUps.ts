@@ -544,13 +544,73 @@ export function buildRedditPowerUpScript(powerUps: PowerUpsConfig): string {
         focusIdx = clamped;
       };
 
+      const isTypingOrModal = (ev) => {
+        const p = (location.pathname || '').toLowerCase();
+        if (
+          p.startsWith('/login') ||
+          p.startsWith('/register') ||
+          p.startsWith('/account') ||
+          p.startsWith('/submit')
+        ) {
+          return true;
+        }
+
+        const isEditableNode = (el) => {
+          if (!el || typeof el !== 'object') return false;
+          const tag = (el.tagName || '').toLowerCase();
+          if (
+            tag === 'input' ||
+            tag === 'textarea' ||
+            tag === 'select' ||
+            tag.includes('input') ||
+            tag.includes('composer') ||
+            tag.includes('search') ||
+            tag.startsWith('auth-flow')
+          ) {
+            return true;
+          }
+          if (el.isContentEditable) return true;
+          if (typeof el.getAttribute === 'function') {
+            const role = (el.getAttribute('role') || '').toLowerCase();
+            if (role === 'textbox' || role === 'searchbox' || role === 'combobox' || role === 'dialog') {
+              return true;
+            }
+          }
+          return false;
+        };
+
+        // Pierce Shadow DOM (Reddit uses <faceplate-text-input> with an inner shadow <input>)
+        if (typeof ev.composedPath === 'function') {
+          const path = ev.composedPath();
+          for (let i = 0; i < path.length; i++) {
+            if (isEditableNode(path[i])) return true;
+          }
+        }
+
+        let active = document.activeElement;
+        while (active) {
+          if (isEditableNode(active)) return true;
+          active = active.shadowRoot ? active.shadowRoot.activeElement : null;
+        }
+
+        if (document.querySelector('auth-flow-modal, faceplate-modal[open], dialog[open]')) {
+          return true;
+        }
+
+        return isEditableNode(ev.target);
+      };
+
       document.addEventListener('keydown', (ev) => {
         if (!window.__odRedditCfg.keyboardNav) return;
         if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
-        const tag = (ev.target && ev.target.tagName ? ev.target.tagName.toLowerCase() : '');
-        if (tag === 'input' || tag === 'textarea' || (ev.target && ev.target.isContentEditable)) return;
+        if (isTypingOrModal(ev)) return;
 
-        const key = ev.key.toLowerCase();
+        const key = (ev.key || '').toLowerCase();
+        if (key !== 'j' && key !== 'k' && key !== 'c' && key !== 'x') return;
+
+        const posts = getPosts();
+        if (posts.length === 0) return;
+
         if (key === 'j') {
           ev.preventDefault();
           focusPost(focusIdx + 1);
@@ -558,14 +618,14 @@ export function buildRedditPowerUpScript(powerUps: PowerUpsConfig): string {
           ev.preventDefault();
           focusPost(focusIdx <= 0 ? 0 : focusIdx - 1);
         } else if (key === 'c' && focusIdx >= 0) {
-          const post = getPosts()[focusIdx];
+          const post = posts[focusIdx];
           const commentsLink = post && (post.querySelector('a[data-click-id="comments"], a.comments, a[slot="full-post-link"]'));
           if (commentsLink) {
             ev.preventDefault();
             commentsLink.click();
           }
         } else if (key === 'x' && focusIdx >= 0) {
-          const post = getPosts()[focusIdx];
+          const post = posts[focusIdx];
           const expando = post && post.querySelector('.expando-button, shreddit-player, button[aria-label*="Expand" i]');
           if (expando && typeof expando.click === 'function') {
             ev.preventDefault();
