@@ -122,11 +122,18 @@ export class IntegrationsManager {
   updateConfig(next: IntegrationsConfig): void {
     const discordWasEnabled = this.config.discordRpcEnabled;
     const clientChanged = this.config.discordClientId !== next.discordClientId;
+    const credsChanged =
+      this.config.listenBrainzToken !== next.listenBrainzToken ||
+      this.config.lastFmSessionKey !== next.lastFmSessionKey;
     this.config = next;
 
     if ((!next.discordRpcEnabled && discordWasEnabled) || clientChanged) {
       this.disconnectDiscord();
       this.lastDiscordKey = '';
+    }
+    if (credsChanged) {
+      this.lastNowPlayingSentKey = '';
+      this.scrobbledCurrent = false;
     }
   }
 
@@ -251,9 +258,20 @@ export class IntegrationsManager {
       ? snapshot.config.services.find((s) => s.id === np.serviceId)
       : undefined;
 
-    const key = `${np.serviceId ?? ''}|${np.playing ? '1' : '0'}|${np.title}|${np.artist ?? ''}`;
+    const durBucket = typeof np.durationSec === 'number' && np.durationSec > 0 ? Math.round(np.durationSec) : 0;
+    // Bucket expected start epoch by 5s so seeking or delayed duration resolution refreshes Discord timestamps
+    const startEpochBucket =
+      np.playing && typeof np.currentTimeSec === 'number'
+        ? Math.round((Date.now() / 1000 - np.currentTimeSec) / 5) * 5
+        : 0;
+    const key = `${np.serviceId ?? ''}|${np.playing ? '1' : '0'}|${np.title}|${np.artist ?? ''}|${durBucket}|${startEpochBucket}`;
     if (key === this.lastDiscordKey) return;
     this.lastDiscordKey = key;
+
+    const safeArtwork =
+      np.artworkUrl && np.artworkUrl.startsWith('https://') && np.artworkUrl.length <= 256
+        ? np.artworkUrl
+        : 'omnideck';
 
     const isMusic = np.serviceId === 'youtube-music' || np.serviceId === 'spotify';
     const activity =
@@ -272,7 +290,7 @@ export class IntegrationsManager {
                   }
                 : undefined,
             assets: {
-              large_image: np.artworkUrl || 'omnideck',
+              large_image: safeArtwork,
               large_text: `${svc?.name ?? 'OmniDeck'} · via OmniDeck`,
             },
           }

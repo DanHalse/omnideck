@@ -142,7 +142,7 @@ export interface OmniDeckBridge {
   importConfigJson: (rawJson: string) => Promise<DesktopSnapshot>;
 
   // Auto-Updater
-  checkForUpdates: () => Promise<UpdateState>;
+  checkForUpdates: (silent?: boolean) => Promise<UpdateState>;
   installUpdate: () => Promise<void>;
   openReleasePage: () => Promise<void>;
 

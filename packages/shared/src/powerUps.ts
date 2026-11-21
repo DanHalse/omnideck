@@ -528,7 +528,7 @@ export function buildMobilePowerUpsScript(serviceId: string, powerUps: PowerUpsC
               btn.type = 'button';
               btn.setAttribute('aria-label', 'Jump to next top-level comment');
               btn.textContent = '↓';
-              btn.style.cssText = 'position:fixed;right:14px;bottom:84px;z-index:9990;width:40px;height:40px;border-radius:999px;border:1px solid rgba(255,255,255,0.2);background:rgba(24,24,27,0.88);color:#fff;font-size:18px;font-weight:700;box-shadow:0 6px 18px rgba(0,0,0,0.45);cursor:pointer;';
+              btn.style.cssText = 'position:fixed;right:14px;bottom:84px;z-index:9990;width:40px;height:40px;padding:0;border-radius:999px;border:1px solid rgba(255,255,255,0.2);background:rgba(24,24,27,0.88);color:#fff;font-size:18px;font-weight:700;line-height:1;align-items:center;justify-content:center;box-shadow:0 6px 18px rgba(0,0,0,0.45);cursor:pointer;';
               btn.addEventListener('click', function() {
                 const roots = Array.from(document.querySelectorAll('shreddit-comment[depth="0"], .sitetable.nestedlisting > .thing.comment'));
                 const next = roots.find(function(el) { return el.getBoundingClientRect().top > 80; });

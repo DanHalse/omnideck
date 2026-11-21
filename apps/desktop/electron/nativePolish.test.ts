@@ -59,8 +59,31 @@ describe('injected browser scripts syntax validation', () => {
           redditFilteredKeywords: ['spoiler', 'r/politics'],
         }),
       ],
-      ['buildSpotifyPowerUpScript', buildSpotifyPowerUpScript(DEFAULT_POWER_UPS)],
-      ['buildAudiblePowerUpScript', buildAudiblePowerUpScript(DEFAULT_POWER_UPS)],
+      ['buildSpotifyPowerUpScript(on)', buildSpotifyPowerUpScript(DEFAULT_POWER_UPS)],
+      [
+        'buildSpotifyPowerUpScript(off)',
+        buildSpotifyPowerUpScript({ ...DEFAULT_POWER_UPS, spotifyHidePodcastsAudiobooks: false }),
+      ],
+      ['buildAudiblePowerUpScript(on)', buildAudiblePowerUpScript(DEFAULT_POWER_UPS)],
+      [
+        'buildAudiblePowerUpScript(off)',
+        buildAudiblePowerUpScript({
+          ...DEFAULT_POWER_UPS,
+          audiblePrecisionSpeed: false,
+          audibleHideStoreClutter: false,
+        }),
+      ],
+      [
+        'buildRedditPowerUpScript(off)',
+        buildRedditPowerUpScript({
+          ...DEFAULT_POWER_UPS,
+          redditHidePromoted: false,
+          redditHideRecommended: false,
+          redditUserTagger: false,
+          redditHoverZoom: false,
+          redditFilteredKeywords: [],
+        }),
+      ],
       ['CAPTURE_HIBERNATE_STATE_SCRIPT', CAPTURE_HIBERNATE_STATE_SCRIPT],
       ['buildRestoreHibernateStateScript', buildRestoreHibernateStateScript(120, 45)],
       ['buildSponsorSegmentsInjector', buildSponsorSegmentsInjector('abc123', [])],

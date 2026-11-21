@@ -20,6 +20,7 @@ import {
   clampDuckLevel,
   deleteCustomWorkspace,
   getVisibleServices,
+  matchesBlockedMusic,
   mergeAiCompanionConfig,
   mergeEqualizerConfig,
   mergeIntegrationsConfig,
@@ -997,8 +998,16 @@ function registerIpcHandlers(): void {
       const updated = store.set(addBlockedMusicEntry(store.get(), input));
       const snap = viewManager.syncConfig(updated);
       viewManager.showToast(`Blocked ${input.kind}: ${input.value}`, 2400);
-      // Immediately skip if the blocked song/artist is currently playing
-      if (snap.nowPlaying.serviceId && snap.nowPlaying.playing) {
+      // Skip only if a music service is playing the newly blocked artist/track
+      if (
+        (snap.nowPlaying.serviceId === 'youtube-music' || snap.nowPlaying.serviceId === 'spotify') &&
+        snap.nowPlaying.playing &&
+        matchesBlockedMusic(
+          snap.nowPlaying.title,
+          snap.nowPlaying.artist,
+          updated.settings.blockedMusic,
+        )
+      ) {
         void viewManager.runMediaAction('next', snap.nowPlaying.serviceId);
       }
       return snap;
@@ -1146,7 +1155,9 @@ function registerIpcHandlers(): void {
   });
 
   // Auto-Updater
-  ipcMain.handle('omnideck:check-updates', () => updateManager?.checkForUpdates(false));
+  ipcMain.handle('omnideck:check-updates', (_e, silent?: boolean) =>
+    updateManager?.checkForUpdates(Boolean(silent)),
+  );
   ipcMain.handle('omnideck:install-update', () => {
     forceQuitting = true;
     updateManager?.quitAndInstall();

@@ -547,7 +547,7 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
       return commit();
     },
 
-    checkForUpdates: async () => {
+    checkForUpdates: async (_silent?: boolean) => {
       updateState = { ...updateState, phase: 'up-to-date', message: `OmniDeck v${APP_VERSION} is up to date.` };
       commit();
       return updateState;

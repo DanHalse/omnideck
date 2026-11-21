@@ -262,7 +262,9 @@ export function buildSeekMediaScript(targetTimeSec: number): string {
       }
 
       if (host.includes('spotify.com')) {
-        const bar = document.querySelector('[data-testid="progress-bar"]');
+        const bar =
+          document.querySelector('[data-testid="progress-bar-background"]') ||
+          document.querySelector('[data-testid="progress-bar"]');
         const durEl = document.querySelector('[data-testid="playback-duration"]');
         if (bar && durEl && durEl.textContent) {
           const parts = durEl.textContent
@@ -278,9 +280,16 @@ export function buildSeekMediaScript(targetTimeSec: number): string {
             const ratio = Math.max(0, Math.min(1, target / totalSec));
             const clientX = rect.left + rect.width * ratio;
             const clientY = rect.top + rect.height / 2;
-            bar.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX, clientY }));
-            bar.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX, clientY }));
-            bar.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX, clientY }));
+            const evInit = { bubbles: true, cancelable: true, clientX, clientY, button: 0 };
+            if (typeof PointerEvent === 'function') {
+              bar.dispatchEvent(new PointerEvent('pointerdown', evInit));
+            }
+            bar.dispatchEvent(new MouseEvent('mousedown', evInit));
+            if (typeof PointerEvent === 'function') {
+              bar.dispatchEvent(new PointerEvent('pointerup', evInit));
+            }
+            bar.dispatchEvent(new MouseEvent('mouseup', evInit));
+            bar.dispatchEvent(new MouseEvent('click', evInit));
             return 'seeked-spotify-bar';
           }
         }

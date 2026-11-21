@@ -464,9 +464,18 @@ export function buildYouTubePowerUpScript(
 
       // Inject A-B Loop & Clean Frame Screenshot controls into YouTube player bar
       const ensurePlayerButtons = () => {
-        if (!window.__odYtCfg.playerControls) return;
+        const abExisting = document.getElementById('__od_yt_ab_btn');
+        const shotExisting = document.getElementById('__od_yt_shot_btn');
+        if (!window.__odYtCfg.playerControls) {
+          window.__odAbLoop = { a: null, b: null };
+          if (abExisting) abExisting.style.display = 'none';
+          if (shotExisting) shotExisting.style.display = 'none';
+          return;
+        }
+        if (abExisting) abExisting.style.display = '';
+        if (shotExisting) shotExisting.style.display = '';
         const rightControls = document.querySelector('#movie_player .ytp-right-controls');
-        if (!rightControls || document.getElementById('__od_yt_shot_btn')) return;
+        if (!rightControls || shotExisting) return;
 
         const fmtT = (s) => {
           const m = Math.floor(s / 60);
@@ -545,9 +554,21 @@ export function buildYouTubePowerUpScript(
 
       // YouTube Music Playlist Quick-Filter & Up Next Total Duration
       const ensureYtmPlaylistFilter = () => {
-        if (!window.__odYtCfg.isMusic || !window.__odYtCfg.ytmPlaylistFilter) return;
+        if (!window.__odYtCfg.isMusic) return;
+        const filterBar = document.getElementById('__od_ytm_filter_bar');
+        const durBadge = document.getElementById('__od_ytm_queue_dur');
+        if (!window.__odYtCfg.ytmPlaylistFilter) {
+          if (filterBar) filterBar.style.display = 'none';
+          if (durBadge) durBadge.style.display = 'none';
+          document.querySelectorAll('ytmusic-playlist-shelf-renderer #contents ytmusic-responsive-list-item-renderer').forEach((row) => {
+            if (row.style.display === 'none') row.style.display = '';
+          });
+          return;
+        }
+        if (filterBar) filterBar.style.display = 'flex';
+        if (durBadge) durBadge.style.display = '';
         const list = document.querySelector('ytmusic-playlist-shelf-renderer #contents');
-        if (list && !document.getElementById('__od_ytm_filter_bar')) {
+        if (list && !filterBar) {
           const bar = document.createElement('div');
           bar.id = '__od_ytm_filter_bar';
           bar.style.cssText = 'display:flex;align-items:center;gap:8px;margin:0 0 10px 0;padding:6px 10px;border-radius:10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);';
@@ -699,9 +720,14 @@ export function buildDeArrowInjector(videoId: string, cleanTitle: string): strin
       if (!location.search.includes(vid)) return;
       const h1 = document.querySelector('ytd-watch-metadata h1 yt-formatted-string, #title h1 yt-formatted-string');
       if (!h1) return;
-      const orig = h1.getAttribute('data-od-orig-title') || (h1.textContent || '').trim();
-      if (!h1.getAttribute('data-od-orig-title') && orig) {
-        h1.setAttribute('data-od-orig-title', orig);
+      const storedVid = h1.getAttribute('data-od-orig-vid');
+      let orig = storedVid === vid ? (h1.getAttribute('data-od-orig-title') || '') : '';
+      if (!orig) {
+        orig = (h1.textContent || '').trim();
+        if (orig) {
+          h1.setAttribute('data-od-orig-vid', vid);
+          h1.setAttribute('data-od-orig-title', orig);
+        }
       }
       h1.textContent = ${JSON.stringify(cleanTitle)};
       h1.title = 'DeArrow clean title · Original: ' + orig;
@@ -973,15 +999,27 @@ export function buildRedditPowerUpScript(powerUps: PowerUpsConfig): string {
           if (expand && typeof expand.click === 'function') expand.click();
         });
       }
-      if (cfg.hidePromoted) {
-        document.querySelectorAll('shreddit-ad-post, .promotedlink').forEach((el) => {
-          el.style.display = 'none';
-        });
-      }
 
-      // Hide "Games on Reddit", Trending, & "Because you visited" / recommended feed injections
-      if (cfg.hideRecommended) {
+      // Promoted posts (reversible)
+      document.querySelectorAll('shreddit-ad-post, .promotedlink').forEach((el) => {
+        if (cfg.hidePromoted) {
+          el.setAttribute('data-od-hidden-promo', '1');
+          el.style.display = 'none';
+        } else if (el.getAttribute('data-od-hidden-promo')) {
+          el.removeAttribute('data-od-hidden-promo');
+          el.style.display = '';
+        }
+      });
+
+      // Hide "Games on Reddit", Trending, & "Because you visited" / recommended feed injections (reversible)
+      if (!cfg.hideRecommended) {
+        document.querySelectorAll('[data-od-hidden-rec="1"]').forEach((el) => {
+          el.removeAttribute('data-od-hidden-rec');
+          el.style.display = '';
+        });
+      } else {
         document.querySelectorAll('reddit-recent-pages, [id*="games-on-reddit"], left-nav-games-section, shreddit-feed-carousel').forEach((el) => {
+          el.setAttribute('data-od-hidden-rec', '1');
           el.style.display = 'none';
         });
         document.querySelectorAll('shreddit-post').forEach((post) => {
@@ -989,22 +1027,30 @@ export function buildRedditPowerUpScript(powerUps: PowerUpsConfig): string {
           const prev = post.previousElementSibling;
           const prevTxt = prev ? (prev.textContent || '').toLowerCase() : '';
           if (reason || prevTxt.includes('because you') || prevTxt.includes('similar to r/') || prevTxt.includes('popular near you')) {
+            post.setAttribute('data-od-hidden-rec', '1');
             post.style.display = 'none';
-            if (prev && prevTxt.length < 90) prev.style.display = 'none';
+            if (prev && prevTxt.length < 90) {
+              prev.setAttribute('data-od-hidden-rec', '1');
+              prev.style.display = 'none';
+            }
           }
         });
       }
 
-      // Keyword & Subreddit feed filter (filteReddit)
+      // Keyword & Subreddit feed filter (filteReddit - reversible when keywords change/removed)
       const kws = cfg.filteredKeywords || [];
-      if (kws.length > 0) {
-        document.querySelectorAll('shreddit-post, .thing.link').forEach((post) => {
-          const title = (post.getAttribute('post-title') || post.querySelector('a.title, [slot="title"]')?.textContent || '').toLowerCase();
-          const sub = (post.getAttribute('subreddit-prefixed-name') || post.getAttribute('data-subreddit-prefixed') || '').toLowerCase();
-          const hit = kws.some((kw) => kw && (title.includes(kw) || sub.includes(kw)));
-          if (hit) post.style.display = 'none';
-        });
-      }
+      document.querySelectorAll('shreddit-post, .thing.link').forEach((post) => {
+        const title = (post.getAttribute('post-title') || post.querySelector('a.title, [slot="title"]')?.textContent || '').toLowerCase();
+        const sub = (post.getAttribute('subreddit-prefixed-name') || post.getAttribute('data-subreddit-prefixed') || '').toLowerCase();
+        const hit = kws.length > 0 && kws.some((kw) => kw && (title.includes(kw) || sub.includes(kw)));
+        if (hit) {
+          post.setAttribute('data-od-hidden-kw', '1');
+          post.style.display = 'none';
+        } else if (post.getAttribute('data-od-hidden-kw')) {
+          post.removeAttribute('data-od-hidden-kw');
+          post.style.display = '';
+        }
+      });
 
       // Exact localized hover timestamps
       document.querySelectorAll('time[datetime]:not([data-od-ts])').forEach((el) => {
@@ -1017,7 +1063,10 @@ export function buildRedditPowerUpScript(powerUps: PowerUpsConfig): string {
       });
 
       // Local User Tagger pills next to u/username links
-      if (cfg.userTagger) {
+      if (!cfg.userTagger) {
+        document.querySelectorAll('[data-od-user-pill]').forEach((p) => { p.style.display = 'none'; });
+      } else {
+        document.querySelectorAll('[data-od-user-pill]').forEach((p) => { p.style.display = ''; });
         const tags = loadTags();
         document.querySelectorAll('a[href*="/user/"]:not([data-od-tagged]), a.author:not([data-od-tagged])').forEach((a) => {
           const href = a.getAttribute('href') || '';
@@ -1104,7 +1153,7 @@ export function buildRedditPowerUpScript(powerUps: PowerUpsConfig): string {
       let zoomBox = null;
       const hideZoom = () => { if (zoomBox) zoomBox.style.display = 'none'; };
       document.addEventListener('mouseover', (ev) => {
-        if (!window.__odRedditCfg.hoverZoom) return;
+        if (!window.__odRedditCfg.hoverZoom) { hideZoom(); return; }
         const img = ev.target && ev.target.closest ? ev.target.closest('shreddit-post img, a.thumbnail img') : null;
         if (!img || !img.src || img.width > 380) return;
         const src = img.src;
@@ -1254,7 +1303,12 @@ export function buildSpotifyPowerUpScript(powerUps: PowerUpsConfig): string {
     };
 
     const runSpotifyCleanups = () => {
-      if (window.__odSpotifyCfg.hidePodcastsAudiobooks) {
+      if (!window.__odSpotifyCfg.hidePodcastsAudiobooks) {
+        document.querySelectorAll('[data-od-sp-hidden="1"]').forEach((el) => {
+          el.removeAttribute('data-od-sp-hidden');
+          el.style.display = '';
+        });
+      } else {
         document.querySelectorAll('section[data-testid="component-shelf"], section[aria-label]').forEach((sec) => {
           const label = (sec.getAttribute('aria-label') || sec.querySelector('h2, a')?.textContent || '').toLowerCase();
           const hasPodcastLinks = Boolean(sec.querySelector('a[href*="/show/"], a[href*="/episode/"], a[href*="/audiobook/"]'));
@@ -1265,12 +1319,14 @@ export function buildSpotifyPowerUpScript(powerUps: PowerUpsConfig): string {
             label.includes('your shows') ||
             hasPodcastLinks
           ) {
+            sec.setAttribute('data-od-sp-hidden', '1');
             sec.style.display = 'none';
           }
         });
         document.querySelectorAll('[role="checkbox"], button').forEach((chip) => {
           const txt = (chip.textContent || '').trim().toLowerCase();
           if (txt === 'podcasts' || txt === 'audiobooks' || txt === 'podcasts & shows') {
+            chip.setAttribute('data-od-sp-hidden', '1');
             chip.style.display = 'none';
           }
         });
@@ -1281,7 +1337,7 @@ export function buildSpotifyPowerUpScript(powerUps: PowerUpsConfig): string {
         const rows = document.querySelectorAll('[data-testid="tracklist-row"]');
         let totalSec = 0;
         rows.forEach((row) => {
-          const durEl = row.querySelector('[aria-colindex="5"], [data-testid="tracklist-row"] > div:last-child');
+          const durEl = row.querySelector('[aria-colindex="5"], :scope > div:last-child');
           const txt = (durEl?.textContent || '').trim();
           const m = txt.match(/(\\d+):(\\d{2})/);
           if (m) totalSec += parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
@@ -1323,21 +1379,28 @@ export function buildAudiblePowerUpScript(powerUps: PowerUpsConfig): string {
     };
 
     const syncAudible = () => {
-      if (window.__odAudibleCfg.hideStoreClutter) {
-        let st = document.getElementById('__od_audible_clutter_css');
-        if (!st) {
-          st = document.createElement('style');
-          st.id = '__od_audible_clutter_css';
-          (document.head || document.documentElement).appendChild(st);
-        }
-        st.textContent = [
-          '[data-widget="adbl-merchandising-banner"], .adbl-upsell-banner, #adbl-store-upsell,',
-          '[data-automation-id*="upsell"], .bc-section:has(a[href*="/ep/audible-plus"]) { display: none !important; }'
-        ].join('\\n');
+      let st = document.getElementById('__od_audible_clutter_css');
+      if (!st) {
+        st = document.createElement('style');
+        st.id = '__od_audible_clutter_css';
+        (document.head || document.documentElement).appendChild(st);
       }
+      st.textContent = window.__odAudibleCfg.hideStoreClutter
+        ? [
+            '[data-widget="adbl-merchandising-banner"], .adbl-upsell-banner, #adbl-store-upsell,',
+            '[data-automation-id*="upsell"], .bc-section:has(a[href*="/ep/audible-plus"]) { display: none !important; }'
+          ].join('\\n')
+        : '';
 
-      if (window.__odAudibleCfg.precisionSpeed && location.pathname.toLowerCase().includes('webplayer')) {
-        if (!document.getElementById('__od_audible_speed_pill') && document.body) {
+      const existingPill = document.getElementById('__od_audible_speed_pill');
+      if (!window.__odAudibleCfg.precisionSpeed) {
+        if (existingPill) existingPill.style.display = 'none';
+        return;
+      }
+      if (existingPill) existingPill.style.display = 'flex';
+
+      if (location.pathname.toLowerCase().includes('webplayer')) {
+        if (!existingPill && document.body) {
           const SPEED_STORE = '__omnideck_audible_speed_' + (location.search || 'default');
           let curSpeed = 1.0;
           try {

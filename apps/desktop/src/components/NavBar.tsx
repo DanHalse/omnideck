@@ -45,6 +45,7 @@ interface NavBarProps {
   isMaximized: boolean;
   toastMessage: string | null;
   update: UpdateState;
+  hideUpdatePill?: boolean;
   onOpenHome: () => void;
   onSelectService: (id: string) => void;
   onSelectWorkspace: (workspaceId: string) => void;
@@ -82,6 +83,7 @@ export function NavBar({
   isMaximized,
   toastMessage,
   update,
+  hideUpdatePill,
   onOpenHome,
   onSelectService,
   onSelectWorkspace,
@@ -134,9 +136,10 @@ export function NavBar({
   };
 
   const showUpdatePill =
-    update.phase === 'downloading' ||
-    update.phase === 'downloaded' ||
-    update.phase === 'available';
+    !hideUpdatePill &&
+    (update.phase === 'downloading' ||
+      update.phase === 'downloaded' ||
+      update.phase === 'available');
 
   if (position === 'left') {
     return (

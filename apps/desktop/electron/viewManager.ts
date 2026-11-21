@@ -1709,7 +1709,8 @@ export class ViewManager {
     wc.on('did-finish-load', () => {
       if (wc.isDestroyed()) return;
       this.applyPowerUpsToView(service, view);
-      if (this.config.settings.equalizer.enabled) {
+      const eq = this.config.settings.equalizer;
+      if (eq.enabled || eq.compressorEnabled || (eq.volumeBoost && eq.volumeBoost > 1.005)) {
         this.applyEqualizerToView(service, view);
       }
 

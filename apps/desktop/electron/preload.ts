@@ -117,7 +117,7 @@ const api: OmniDeckBridge = {
   getExportJson: () => ipcRenderer.invoke('omnideck:get-export-json'),
   importConfigJson: (rawJson) => ipcRenderer.invoke('omnideck:import-config-json', rawJson),
 
-  checkForUpdates: () => ipcRenderer.invoke('omnideck:check-updates'),
+  checkForUpdates: (silent) => ipcRenderer.invoke('omnideck:check-updates', Boolean(silent)),
   installUpdate: () => ipcRenderer.invoke('omnideck:install-update'),
   openReleasePage: () => ipcRenderer.invoke('omnideck:open-release-page'),
 

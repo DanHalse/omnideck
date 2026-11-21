@@ -92,12 +92,12 @@ export function App() {
     document.documentElement.setAttribute('data-theme', theme);
   }, [snapshot?.config.settings.theme]);
 
-  // Trigger an automatic update check immediately on first launch
+  // Trigger a silent automatic update check immediately on first launch
   useEffect(() => {
     if (!snapshot || startupUpdateCheckedRef.current) return;
     startupUpdateCheckedRef.current = true;
     if (snapshot.config.settings.autoCheckUpdates && snapshot.update.phase === 'idle') {
-      void api.checkForUpdates();
+      void api.checkForUpdates(true);
     }
   }, [api, snapshot]);
 
@@ -391,7 +391,7 @@ export function App() {
                   <span>Close Player</span>
                 </button>
               )}
-              {hasUpdateAction && (
+              {hasUpdateAction && !showUpdateBanner && (
                 <button
                   type="button"
                   className="pill-btn pill-btn--update"
