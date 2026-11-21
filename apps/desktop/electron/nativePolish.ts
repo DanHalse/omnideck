@@ -268,8 +268,11 @@ export const READ_MEDIA_METADATA_SCRIPT = `(function () {
             }
           }
 
-          const imgEl = bar.querySelector('img.image.ytmusic-player-bar, .thumbnail-image-wrapper img');
-          if (imgEl && imgEl.src && /^https?:\/\//i.test(imgEl.src)) {
+          const imgEl =
+            bar.querySelector('img.image.ytmusic-player-bar') ||
+            bar.querySelector('.thumbnail-image-wrapper img') ||
+            bar.querySelector('img[src^="https://"], img[src^="http://"]');
+          if (imgEl && typeof imgEl.src === 'string' && (imgEl.src.startsWith('https://') || imgEl.src.startsWith('http://'))) {
             domArtwork = imgEl.src;
           }
 
@@ -290,16 +293,21 @@ export const READ_MEDIA_METADATA_SCRIPT = `(function () {
     } catch {}
 
     const ms = navigator.mediaSession && navigator.mediaSession.metadata;
+    const msTitle = ms && ms.title ? String(ms.title).trim() : '';
+    const msArtist = ms && ms.artist ? String(ms.artist).trim() : '';
+    const msAlbum = ms && ms.album ? String(ms.album).trim() : '';
     let msArtwork = '';
     if (ms && Array.isArray(ms.artwork) && ms.artwork.length > 0) {
       const best = ms.artwork[ms.artwork.length - 1] || ms.artwork[0];
       if (best && typeof best.src === 'string') msArtwork = best.src;
     }
 
-    const title = domTitle || (ms && ms.title ? String(ms.title).trim() : '');
-    const artist = domArtist || (ms && ms.artist ? String(ms.artist).trim() : '');
-    const album = domAlbum || (ms && ms.album ? String(ms.album).trim() : '');
-    const artworkUrl = domArtwork || msArtwork;
+    const msMatchesDom = !domTitle || !msTitle || msTitle.toLowerCase() === domTitle.toLowerCase();
+    const title = domTitle || msTitle;
+    const artist = domArtist || (msMatchesDom ? msArtist : '');
+    const album = domAlbum || (msMatchesDom ? msAlbum : '');
+    // Prefer higher-res MediaSession artwork when it matches the live DOM track; otherwise use live DOM art
+    const artworkUrl = (msMatchesDom && msArtwork) ? msArtwork : (domArtwork || msArtwork);
 
     if (title || artist || typeof currentTimeSec === 'number') {
       return {

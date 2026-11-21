@@ -1,6 +1,6 @@
 {
   "name": "omnideck-monorepo",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "private": true,
   "description": "OmniDeck — Cross-platform Desktop (Windows & Linux, Widevine DRM) and Android media hub for YouTube, Twitch, Spotify, YouTube Music, Reddit, and Audible.",
   "workspaces": [
