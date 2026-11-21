@@ -56,6 +56,7 @@ const api: OmniDeckBridge = {
   mediaNext: (serviceId) => ipcRenderer.invoke('omnideck:media-next', serviceId),
   mediaPrevious: (serviceId) => ipcRenderer.invoke('omnideck:media-previous', serviceId),
   mediaLikeTrack: (serviceId) => ipcRenderer.invoke('omnideck:media-like', serviceId),
+  mediaDislikeTrack: (serviceId) => ipcRenderer.invoke('omnideck:media-dislike', serviceId),
   resumeAutoPaused: () => ipcRenderer.invoke('omnideck:resume-auto-paused'),
   setSleepTimer: (minutes) => ipcRenderer.invoke('omnideck:set-sleep-timer', minutes),
   triggerPip: (serviceId) => ipcRenderer.invoke('omnideck:trigger-pip', serviceId),

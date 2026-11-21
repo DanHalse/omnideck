@@ -51,6 +51,7 @@ export interface OmniDeckBridge {
   mediaNext: (serviceId?: string) => Promise<void>;
   mediaPrevious: (serviceId?: string) => Promise<void>;
   mediaLikeTrack: (serviceId?: string) => Promise<DesktopSnapshot>;
+  mediaDislikeTrack: (serviceId?: string) => Promise<DesktopSnapshot>;
   resumeAutoPaused: () => Promise<DesktopSnapshot>;
   setSleepTimer: (minutes: number) => Promise<DesktopSnapshot>;
   triggerPip: (serviceId: string) => Promise<void>;

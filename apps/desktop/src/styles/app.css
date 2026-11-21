@@ -2669,14 +2669,22 @@ kbd {
 .mini-hud {
   width: 100%;
   height: 100%;
+  /* 5px outer non-drag margin keeps Windows frameless edge/corner resize handles easy to grab */
+  padding: 5px;
+  background: var(--bg-chrome);
+  border: 1px solid var(--border-default);
+  -webkit-app-region: no-drag;
+  user-select: none;
+}
+
+.mini-hud__inner {
+  width: 100%;
+  height: 100%;
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 12px;
-  background: var(--bg-chrome);
-  border: 1px solid var(--border-default);
+  padding: 5px 7px;
   -webkit-app-region: drag;
-  user-select: none;
 }
 
 .mini-hud button {
@@ -2684,8 +2692,8 @@ kbd {
 }
 
 .mini-hud__art {
-  width: 78px;
-  height: 78px;
+  height: clamp(56px, calc(100vh - 28px), 136px);
+  width: clamp(56px, calc(100vh - 28px), 136px);
   border-radius: var(--radius-md);
   overflow: hidden;
   background: var(--bg-surface);
@@ -2708,6 +2716,7 @@ kbd {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
+  gap: 6px;
   padding: 2px 0;
 }
 
@@ -2724,7 +2733,7 @@ kbd {
 }
 
 .mini-hud__title {
-  font-size: 13px;
+  font-size: clamp(12.5px, 2.2vh, 16px);
   font-weight: 700;
   color: var(--ink-primary);
   white-space: nowrap;
@@ -2733,7 +2742,7 @@ kbd {
 }
 
 .mini-hud__artist {
-  font-size: 11.5px;
+  font-size: clamp(11px, 1.8vh, 13px);
   color: var(--ink-secondary);
   white-space: nowrap;
   overflow: hidden;
@@ -2767,8 +2776,39 @@ kbd {
 .mini-hud__controls {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   flex-shrink: 0;
+}
+
+.mini-hud__thumb--like {
+  color: var(--accent-primary) !important;
+  background: var(--accent-primary-soft) !important;
+}
+
+.mini-hud__thumb--dislike {
+  color: var(--status-danger) !important;
+  background: rgba(239, 68, 68, 0.14) !important;
+}
+
+@media (min-height: 155px) {
+  .mini-hud__bottom {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .mini-hud__lyric {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    font-size: 12.5px;
+    line-height: 1.4;
+  }
+
+  .mini-hud__controls {
+    justify-content: flex-end;
+  }
 }
 
 /* ============================================================

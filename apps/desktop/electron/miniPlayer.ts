@@ -2,9 +2,16 @@ import path from 'node:path';
 import { BrowserWindow, screen } from 'electron';
 import type { DesktopSnapshot } from '@omnideck/shared';
 
+interface SavedMiniBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export class MiniPlayerManager {
   private win: BrowserWindow | null = null;
-  private lastPosition: { x: number; y: number } | null = null;
+  private lastBounds: SavedMiniBounds | null = null;
   private readonly onStateChanged: () => void;
 
   constructor(onStateChanged: () => void) {
@@ -36,20 +43,29 @@ export class MiniPlayerManager {
       return;
     }
 
-    const width = 372;
-    const height = 114;
+    const defaultWidth = 408;
+    const defaultHeight = 118;
     const primaryWorkArea = screen.getPrimaryDisplay().workArea;
-    const defaultX = primaryWorkArea.x + primaryWorkArea.width - width - 24;
-    const defaultY = primaryWorkArea.y + primaryWorkArea.height - height - 24;
-    const pos = this.lastPosition ?? { x: defaultX, y: defaultY };
+    const defaultX = primaryWorkArea.x + primaryWorkArea.width - defaultWidth - 24;
+    const defaultY = primaryWorkArea.y + primaryWorkArea.height - defaultHeight - 24;
+    const bounds = this.lastBounds ?? {
+      x: defaultX,
+      y: defaultY,
+      width: defaultWidth,
+      height: defaultHeight,
+    };
 
     const miniWin = new BrowserWindow({
-      width,
-      height,
-      x: pos.x,
-      y: pos.y,
+      width: bounds.width,
+      height: bounds.height,
+      minWidth: 300,
+      minHeight: 96,
+      maxWidth: 720,
+      maxHeight: 280,
+      x: bounds.x,
+      y: bounds.y,
       frame: false,
-      resizable: false,
+      resizable: true,
       maximizable: false,
       minimizable: false,
       fullscreenable: false,
@@ -71,18 +87,21 @@ export class MiniPlayerManager {
     miniWin.setAlwaysOnTop(true, 'screen-saver', 1);
     miniWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
+    const saveBounds = () => {
+      if (!miniWin.isDestroyed()) {
+        const b = miniWin.getBounds();
+        this.lastBounds = { x: b.x, y: b.y, width: b.width, height: b.height };
+      }
+    };
+
     miniWin.on('blur', () => {
       if (!miniWin.isDestroyed() && miniWin.isVisible()) {
         miniWin.setAlwaysOnTop(true, 'screen-saver', 1);
       }
     });
 
-    miniWin.on('moved', () => {
-      if (!miniWin.isDestroyed()) {
-        const [x, y] = miniWin.getPosition();
-        this.lastPosition = { x, y };
-      }
-    });
+    miniWin.on('moved', saveBounds);
+    miniWin.on('resized', saveBounds);
 
     miniWin.on('closed', () => {
       this.win = null;

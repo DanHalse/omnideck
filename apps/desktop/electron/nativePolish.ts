@@ -234,6 +234,25 @@ export const READ_MEDIA_METADATA_SCRIPT = `(function () {
     }
 
     const ms = navigator.mediaSession && navigator.mediaSession.metadata;
+    let likeStatus = 'none';
+    try {
+      const host = (location.hostname || '').toLowerCase();
+      if (host.includes('music.youtube.com')) {
+        const likeBtn =
+          document.querySelector('ytmusic-player-bar ytmusic-like-button-renderer #button-shape-like button') ||
+          document.querySelector('ytmusic-player-bar ytmusic-like-button-renderer .like button') ||
+          document.querySelector('ytmusic-player-bar button[aria-label="Like"], ytmusic-player-bar button[aria-label="Remove like"]');
+        const dislikeBtn =
+          document.querySelector('ytmusic-player-bar ytmusic-like-button-renderer #button-shape-dislike button') ||
+          document.querySelector('ytmusic-player-bar ytmusic-like-button-renderer .dislike button') ||
+          document.querySelector('ytmusic-player-bar button[aria-label="Dislike"], ytmusic-player-bar button[aria-label="Remove dislike"]');
+        const likePressed = likeBtn && (likeBtn.getAttribute('aria-pressed') === 'true' || /remove like/i.test(likeBtn.getAttribute('aria-label') || ''));
+        const dislikePressed = dislikeBtn && (dislikeBtn.getAttribute('aria-pressed') === 'true' || /remove dislike/i.test(dislikeBtn.getAttribute('aria-label') || ''));
+        if (likePressed) likeStatus = 'like';
+        else if (dislikePressed) likeStatus = 'dislike';
+      }
+    } catch {}
+
     if (ms && (ms.title || ms.artist)) {
       let artworkUrl = '';
       if (Array.isArray(ms.artwork) && ms.artwork.length > 0) {
@@ -246,7 +265,8 @@ export const READ_MEDIA_METADATA_SCRIPT = `(function () {
         album: String(ms.album || '').trim(),
         artworkUrl: artworkUrl,
         currentTimeSec,
-        durationSec
+        durationSec,
+        likeStatus
       };
     }
 
@@ -257,7 +277,8 @@ export const READ_MEDIA_METADATA_SCRIPT = `(function () {
         album: '',
         artworkUrl: '',
         currentTimeSec,
-        durationSec
+        durationSec,
+        likeStatus
       };
     }
     return null;

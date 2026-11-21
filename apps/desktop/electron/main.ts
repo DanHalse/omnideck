@@ -774,9 +774,16 @@ function registerIpcHandlers(): void {
     await viewManager?.runMediaAction('previous', serviceId);
     keepMiniPlayerOnTop();
   });
-  ipcMain.handle('omnideck:media-like', (_e, serviceId?: string) =>
-    viewManager?.runMediaAction('like-track', serviceId),
-  );
+  ipcMain.handle('omnideck:media-like', async (_e, serviceId?: string) => {
+    const res = await viewManager?.runMediaAction('like-track', serviceId);
+    keepMiniPlayerOnTop();
+    return res;
+  });
+  ipcMain.handle('omnideck:media-dislike', async (_e, serviceId?: string) => {
+    const res = await viewManager?.runMediaAction('dislike-track', serviceId);
+    keepMiniPlayerOnTop();
+    return res;
+  });
   ipcMain.handle('omnideck:resume-auto-paused', () => viewManager?.resumeAutoPaused());
   ipcMain.handle('omnideck:set-sleep-timer', (_e, minutes: number) =>
     viewManager?.setSleepTimer(minutes),

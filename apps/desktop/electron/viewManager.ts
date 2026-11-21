@@ -77,6 +77,7 @@ interface MediaMeta {
   artworkUrl?: string;
   currentTimeSec?: number;
   durationSec?: number;
+  likeStatus?: 'like' | 'dislike' | 'none';
 }
 
 interface HibernateSnapshot {
@@ -718,10 +719,21 @@ export class ViewManager {
         const svc = this.findService(targetId);
         this.showToast(
           result === 'liked'
-            ? `Liked current ${svc?.shortName ?? 'track'}`
+            ? `Updated Thumbs Up in ${svc?.shortName ?? 'player'}`
             : `No active like button found in ${svc?.name ?? targetId}`,
           2200,
         );
+        setTimeout(() => void this.pollMediaMetadata(targetId, true), 260);
+      }
+      if (action === 'dislike-track') {
+        const svc = this.findService(targetId);
+        this.showToast(
+          result === 'disliked'
+            ? `Updated Thumbs Down in ${svc?.shortName ?? 'player'}`
+            : `No active dislike button found in ${svc?.name ?? targetId}`,
+          2200,
+        );
+        setTimeout(() => void this.pollMediaMetadata(targetId, true), 260);
       }
     } catch {
       // Ignore if page is mid-navigation
@@ -1161,6 +1173,7 @@ export class ViewManager {
       durationSec: meta?.durationSec,
       currentLyricLine,
       duckedServiceIds: [...this.duckedServiceIds],
+      likeStatus: meta?.likeStatus,
     };
   }
 
@@ -1851,12 +1864,14 @@ export class ViewManager {
           typeof result.currentTimeSec === 'number' ? result.currentTimeSec : prev?.currentTimeSec,
         durationSec:
           typeof result.durationSec === 'number' ? result.durationSec : prev?.durationSec,
+        likeStatus: result.likeStatus ?? prev?.likeStatus,
       };
 
       const metaChanged =
         merged.title !== prev?.title ||
         merged.artist !== prev?.artist ||
-        merged.artworkUrl !== prev?.artworkUrl;
+        merged.artworkUrl !== prev?.artworkUrl ||
+        merged.likeStatus !== prev?.likeStatus;
       const timeChanged =
         emitTimeUpdates &&
         typeof merged.currentTimeSec === 'number' &&

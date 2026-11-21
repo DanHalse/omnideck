@@ -9,6 +9,8 @@ import {
   PlayIcon,
   SkipBackIcon,
   SkipForwardIcon,
+  ThumbDownIcon,
+  ThumbUpIcon,
 } from './Icons';
 
 export function MiniPlayerApp() {
@@ -38,83 +40,115 @@ export function MiniPlayerApp() {
   const svc = np?.serviceId
     ? snapshot?.config.services.find((s) => s.id === np.serviceId)
     : undefined;
+  const showThumbs = np?.serviceId === 'youtube-music' || np?.serviceId === 'youtube';
+  const isLiked = np?.likeStatus === 'like';
+  const isDisliked = np?.likeStatus === 'dislike';
 
   return (
     <div className="mini-hud" role="region" aria-label="OmniDeck Mini-Player HUD">
-      <div className="mini-hud__art">
-        {np?.artworkUrl ? (
-          <img src={np.artworkUrl} alt="" />
-        ) : (
-          <ServiceIcon
-            icon={svc?.icon ?? 'youtube-music'}
-            size={26}
-            color={svc?.accentColor ?? '#E87A3E'}
-          />
-        )}
-      </div>
-
-      <div className="mini-hud__main">
-        <div className="mini-hud__top">
-          <div className="mini-hud__meta">
-            <div className="mini-hud__title">{np?.title || 'OmniDeck Ready'}</div>
-            <div className="mini-hud__artist">
-              {np?.artist || svc?.name || 'Play music to control it here'}
-            </div>
-          </div>
-          <div className="mini-hud__win-actions">
-            <button
-              type="button"
-              className="icon-btn icon-btn--sm"
-              title="Return to OmniDeck"
-              onClick={() => void api.focusMainWindow()}
-            >
-              <ExpandStageIcon size={12} />
-            </button>
-            <button
-              type="button"
-              className="icon-btn icon-btn--sm"
-              title="Close Mini-Player"
-              onClick={() => void api.toggleMiniPlayer(false)}
-            >
-              <CloseIcon size={12} />
-            </button>
-          </div>
+      <div className="mini-hud__inner">
+        <div className="mini-hud__art">
+          {np?.artworkUrl ? (
+            <img src={np.artworkUrl} alt="" />
+          ) : (
+            <ServiceIcon
+              icon={svc?.icon ?? 'youtube-music'}
+              size={28}
+              color={svc?.accentColor ?? '#E87A3E'}
+            />
+          )}
         </div>
 
-        <div className="mini-hud__bottom">
-          <div className="mini-hud__lyric" title={np?.currentLyricLine || ''}>
-            {np?.currentLyricLine
-              ? `♪ ${np.currentLyricLine}`
-              : svc
-                ? `${svc.name}${np?.playing ? ' · Playing' : ' · Paused'}`
-                : 'Drag anywhere to move'}
+        <div className="mini-hud__main">
+          <div className="mini-hud__top">
+            <div className="mini-hud__meta">
+              <div className="mini-hud__title">{np?.title || 'OmniDeck Ready'}</div>
+              <div className="mini-hud__artist">
+                {np?.artist || svc?.name || 'Play music to control it here'}
+              </div>
+            </div>
+            <div className="mini-hud__win-actions">
+              <button
+                type="button"
+                className="icon-btn icon-btn--sm"
+                title="Return to OmniDeck"
+                onClick={() => void api.focusMainWindow()}
+              >
+                <ExpandStageIcon size={12} />
+              </button>
+              <button
+                type="button"
+                className="icon-btn icon-btn--sm"
+                title="Close Mini-Player"
+                onClick={() => void api.toggleMiniPlayer(false)}
+              >
+                <CloseIcon size={12} />
+              </button>
+            </div>
           </div>
 
-          <div className="mini-hud__controls">
-            <button
-              type="button"
-              className="icon-btn icon-btn--sm"
-              aria-label="Previous"
-              onClick={() => void api.mediaPrevious(np?.serviceId ?? undefined)}
-            >
-              <SkipBackIcon size={12} />
-            </button>
-            <button
-              type="button"
-              className="icon-btn icon-btn--sm media-dock__play"
-              aria-label={np?.playing ? 'Pause' : 'Play'}
-              onClick={() => void api.mediaPlayPause(np?.serviceId ?? undefined)}
-            >
-              {np?.playing ? <PauseIcon size={12} /> : <PlayIcon size={12} />}
-            </button>
-            <button
-              type="button"
-              className="icon-btn icon-btn--sm"
-              aria-label="Next"
-              onClick={() => void api.mediaNext(np?.serviceId ?? undefined)}
-            >
-              <SkipForwardIcon size={12} />
-            </button>
+          <div className="mini-hud__bottom">
+            <div className="mini-hud__lyric" title={np?.currentLyricLine || ''}>
+              {np?.currentLyricLine
+                ? `♪ ${np.currentLyricLine}`
+                : svc
+                  ? `${svc.name}${np?.playing ? ' · Playing' : ' · Paused'}`
+                  : 'Drag to move · Resize from any edge'}
+            </div>
+
+            <div className="mini-hud__controls">
+              {showThumbs && (
+                <>
+                  <button
+                    type="button"
+                    className={`icon-btn icon-btn--sm ${isDisliked ? 'mini-hud__thumb--dislike' : ''}`}
+                    aria-label="Thumbs Down"
+                    aria-pressed={isDisliked}
+                    title={isDisliked ? 'Remove Thumbs Down' : 'Thumbs Down'}
+                    onClick={() => void api.mediaDislikeTrack(np?.serviceId ?? undefined)}
+                  >
+                    <ThumbDownIcon size={12} filled={isDisliked} />
+                  </button>
+                  <button
+                    type="button"
+                    className={`icon-btn icon-btn--sm ${isLiked ? 'mini-hud__thumb--like' : ''}`}
+                    aria-label="Thumbs Up"
+                    aria-pressed={isLiked}
+                    title={isLiked ? 'Remove Thumbs Up' : 'Thumbs Up'}
+                    onClick={() => void api.mediaLikeTrack(np?.serviceId ?? undefined)}
+                  >
+                    <ThumbUpIcon size={12} filled={isLiked} />
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                className="icon-btn icon-btn--sm"
+                aria-label="Previous"
+                title="Previous song"
+                onClick={() => void api.mediaPrevious(np?.serviceId ?? undefined)}
+              >
+                <SkipBackIcon size={12} />
+              </button>
+              <button
+                type="button"
+                className="icon-btn icon-btn--sm media-dock__play"
+                aria-label={np?.playing ? 'Pause' : 'Play'}
+                title={np?.playing ? 'Pause' : 'Play'}
+                onClick={() => void api.mediaPlayPause(np?.serviceId ?? undefined)}
+              >
+                {np?.playing ? <PauseIcon size={12} /> : <PlayIcon size={12} />}
+              </button>
+              <button
+                type="button"
+                className="icon-btn icon-btn--sm"
+                aria-label="Next"
+                title="Next song"
+                onClick={() => void api.mediaNext(np?.serviceId ?? undefined)}
+              >
+                <SkipForwardIcon size={12} />
+              </button>
+            </div>
           </div>
         </div>
       </div>

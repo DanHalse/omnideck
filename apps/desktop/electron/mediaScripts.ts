@@ -7,7 +7,8 @@ export type MediaControlAction =
   | 'pip'
   | 'pip-enter'
   | 'rewind-15'
-  | 'like-track';
+  | 'like-track'
+  | 'dislike-track';
 
 /**
  * Generates an injected JavaScript snippet to control media playback, Video PiP,
@@ -104,6 +105,7 @@ export function buildMediaControlScript(action: MediaControlAction): string {
       if (host.includes('music.youtube.com')) {
         if (clickFirst([
           'ytmusic-player-bar ytmusic-like-button-renderer #button-shape-like button',
+          'ytmusic-player-bar ytmusic-like-button-renderer .like button',
           'ytmusic-player-bar button[aria-label="Like"]',
           'ytmusic-player-bar button[aria-label="Remove like"]'
         ])) return 'liked';
@@ -113,6 +115,24 @@ export function buildMediaControlScript(action: MediaControlAction): string {
           'like-button-view-model button',
           'ytd-watch-metadata button[aria-label*="like this video" i]'
         ])) return 'liked';
+      }
+      return 'noop';
+    }
+
+    if (${JSON.stringify(action)} === 'dislike-track') {
+      if (host.includes('music.youtube.com')) {
+        if (clickFirst([
+          'ytmusic-player-bar ytmusic-like-button-renderer #button-shape-dislike button',
+          'ytmusic-player-bar ytmusic-like-button-renderer .dislike button',
+          'ytmusic-player-bar button[aria-label="Dislike"]',
+          'ytmusic-player-bar button[aria-label="Remove dislike"]'
+        ])) return 'disliked';
+      }
+      if (host.includes('youtube.com')) {
+        if (clickFirst([
+          'dislike-button-view-model button',
+          'ytd-watch-metadata button[aria-label*="Dislike this video" i]'
+        ])) return 'disliked';
       }
       return 'noop';
     }

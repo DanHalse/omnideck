@@ -326,6 +326,10 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
       toastMessage = 'Liked current track';
       return commit();
     },
+    mediaDislikeTrack: async () => {
+      toastMessage = 'Disliked current track';
+      return commit();
+    },
     resumeAutoPaused: async () => {
       if (autoPausedId && runtime[autoPausedId]) {
         runtime[autoPausedId] = { ...runtime[autoPausedId], audible: true };

@@ -343,6 +343,7 @@ export interface NowPlayingState {
   durationSec?: number;
   currentLyricLine?: string;
   duckedServiceIds?: string[];
+  likeStatus?: 'like' | 'dislike' | 'none';
 }
 
 export interface SleepTimerState {
