@@ -77,6 +77,8 @@ interface MediaMeta {
   artworkUrl?: string;
   currentTimeSec?: number;
   durationSec?: number;
+  isPlaying?: boolean;
+  syncedAt?: number;
   likeStatus?: 'like' | 'dislike' | 'none';
 }
 
@@ -99,6 +101,7 @@ export class ViewManager {
   private readonly webContentsToService = new Map<number, string>();
   private readonly runtime = new Map<string, ServiceRuntimeState>();
   private readonly mediaMeta = new Map<string, MediaMeta>();
+  private readonly pollingMetaServiceIds = new Set<string>();
   private readonly hibernateSnapshots = new Map<string, HibernateSnapshot>();
   private readonly pendingRewindServiceIds = new Set<string>();
   private readonly duckedServiceIds = new Set<string>();
@@ -175,6 +178,9 @@ export class ViewManager {
     if (this.miniPlayerOpen === open) return;
     this.miniPlayerOpen = open;
     this.syncFastProgressLoop();
+    if (open) {
+      this.pollFastProgressTargets();
+    }
     this.emitSnapshot();
   }
 
@@ -183,8 +189,7 @@ export class ViewManager {
     this.nowPlayingHubActive = active;
     this.syncFastProgressLoop();
     if (active) {
-      const npId = this.resolveMediaTargetId();
-      if (npId) void this.pollMediaMetadata(npId);
+      this.pollFastProgressTargets();
     }
   }
 
@@ -696,8 +701,9 @@ export class ViewManager {
       }
       if (action === 'next' || action === 'previous') {
         // Refresh track metadata promptly so Mini-Player HUD & MediaDock reflect the new song immediately
-        setTimeout(() => void this.pollMediaMetadata(targetId, true), 450);
-        setTimeout(() => void this.pollMediaMetadata(targetId, true), 1300);
+        setTimeout(() => void this.pollMediaMetadata(targetId, true), 200);
+        setTimeout(() => void this.pollMediaMetadata(targetId, true), 600);
+        setTimeout(() => void this.pollMediaMetadata(targetId, true), 1200);
 
         // If Chromium Video PiP was open and closed during track switch, re-attach it cleanly on the new track
         if (wasPipOpen) {
@@ -1153,7 +1159,11 @@ export class ViewManager {
       typeof meta?.currentTimeSec === 'number' &&
       this.activeLyricsTrackKey === `${targetId}::${title.toLowerCase()}`
     ) {
-      const idx = findActiveLyricIndex(this.activeLyricLines, meta.currentTimeSec);
+      const elapsedSinceSync =
+        rt.audible && typeof meta.syncedAt === 'number'
+          ? Math.min(1.0, Math.max(0, (Date.now() - meta.syncedAt) / 1000))
+          : 0;
+      const idx = findActiveLyricIndex(this.activeLyricLines, meta.currentTimeSec + elapsedSinceSync);
       if (idx >= 0) {
         currentLyricLine = this.activeLyricLines[idx].text;
       }
@@ -1171,6 +1181,7 @@ export class ViewManager {
       autoPausedServiceId: this.autoPausedServiceId,
       currentTimeSec: meta?.currentTimeSec,
       durationSec: meta?.durationSec,
+      playbackSyncedAt: meta?.syncedAt,
       currentLyricLine,
       duckedServiceIds: [...this.duckedServiceIds],
       likeStatus: meta?.likeStatus,
@@ -1845,8 +1856,10 @@ export class ViewManager {
   }
 
   private async pollMediaMetadata(serviceId: string, emitTimeUpdates = false): Promise<void> {
+    if (this.pollingMetaServiceIds.has(serviceId)) return;
     const wc = this.getMediaWebContents(serviceId);
     if (!wc) return;
+    this.pollingMetaServiceIds.add(serviceId);
     try {
       const result = (await wc.executeJavaScript(
         READ_MEDIA_METADATA_SCRIPT,
@@ -1854,35 +1867,76 @@ export class ViewManager {
       )) as MediaMeta | null;
 
       if (!result) return;
+      const now = Date.now();
+      const rt = this.runtime.get(serviceId);
+      const livePlaying = Boolean(result.isPlaying) || wc.isCurrentlyAudible();
+      let audibleChanged = false;
+      if (rt && rt.audible !== livePlaying) {
+        rt.audible = livePlaying;
+        audibleChanged = true;
+        if (livePlaying) {
+          this.lastNowPlayingServiceId = serviceId;
+        }
+      }
+
       const prev = this.mediaMeta.get(serviceId);
+      const nextTitle = result.title || prev?.title || '';
+      const titleChanged = Boolean(nextTitle && prev?.title && nextTitle !== prev.title);
+
       const merged: MediaMeta = {
-        title: result.title || prev?.title || '',
-        artist: result.artist || prev?.artist,
-        album: result.album || prev?.album,
-        artworkUrl: result.artworkUrl || prev?.artworkUrl,
+        title: nextTitle,
+        artist: result.artist || (titleChanged ? undefined : prev?.artist),
+        album: result.album || (titleChanged ? undefined : prev?.album),
+        artworkUrl: result.artworkUrl || (titleChanged ? undefined : prev?.artworkUrl),
         currentTimeSec:
-          typeof result.currentTimeSec === 'number' ? result.currentTimeSec : prev?.currentTimeSec,
+          typeof result.currentTimeSec === 'number'
+            ? result.currentTimeSec
+            : titleChanged
+              ? 0
+              : prev?.currentTimeSec,
         durationSec:
-          typeof result.durationSec === 'number' ? result.durationSec : prev?.durationSec,
-        likeStatus: result.likeStatus ?? prev?.likeStatus,
+          typeof result.durationSec === 'number'
+            ? result.durationSec
+            : titleChanged
+              ? undefined
+              : prev?.durationSec,
+        isPlaying: livePlaying,
+        syncedAt: typeof result.currentTimeSec === 'number' ? now : prev?.syncedAt,
+        likeStatus: result.likeStatus ?? (titleChanged ? 'none' : prev?.likeStatus),
       };
+
+      if (titleChanged) {
+        // Immediately drop previous song's synced lyrics so stale lines never linger on the HUD
+        if (this.activeLyricsTrackKey.startsWith(`${serviceId}::`)) {
+          this.activeLyricsTrackKey = '';
+          this.activeLyricLines = [];
+        }
+        if (livePlaying) {
+          this.lastNowPlayingServiceId = serviceId;
+        }
+      }
 
       const metaChanged =
         merged.title !== prev?.title ||
         merged.artist !== prev?.artist ||
         merged.artworkUrl !== prev?.artworkUrl ||
         merged.likeStatus !== prev?.likeStatus;
+      const durationChanged =
+        typeof merged.durationSec === 'number' &&
+        Math.abs(merged.durationSec - (prev?.durationSec ?? 0)) >= 1.5;
       const timeChanged =
         emitTimeUpdates &&
         typeof merged.currentTimeSec === 'number' &&
-        Math.abs((merged.currentTimeSec ?? 0) - (prev?.currentTimeSec ?? -99)) >= 0.75;
+        Math.abs(merged.currentTimeSec - (prev?.currentTimeSec ?? -99)) >= 0.25;
 
-      if (metaChanged || timeChanged) {
+      if (metaChanged || durationChanged || timeChanged || audibleChanged) {
         this.mediaMeta.set(serviceId, merged);
         this.emitSnapshot();
       }
     } catch {
       // Ignore cross-frame/navigation errors
+    } finally {
+      this.pollingMetaServiceIds.delete(serviceId);
     }
   }
 
@@ -2058,18 +2112,34 @@ export class ViewManager {
     }, 15_000);
   }
 
+  private pollFastProgressTargets(): void {
+    if (this.mainWindow.isDestroyed()) return;
+    const targets = new Set<string>();
+    const resolved = this.resolveMediaTargetId();
+    if (resolved) targets.add(resolved);
+
+    // Always include mounted music services so track transitions & play/pause recover even if rt.audible flickered
+    for (const musicId of ['youtube-music', 'spotify', 'audible']) {
+      const rt = this.runtime.get(musicId);
+      if (rt?.mounted && !rt.hibernated) {
+        targets.add(musicId);
+      }
+    }
+
+    for (const id of targets) {
+      const rt = this.runtime.get(id);
+      if (rt?.mounted && !rt.hibernated) {
+        void this.pollMediaMetadata(id, true);
+      }
+    }
+  }
+
   private syncFastProgressLoop(): void {
     const shouldRun = this.nowPlayingHubActive || this.miniPlayerOpen;
     if (shouldRun && !this.fastProgressInterval) {
       this.fastProgressInterval = setInterval(() => {
-        if (this.mainWindow.isDestroyed()) return;
-        const npId = this.resolveMediaTargetId();
-        if (!npId) return;
-        const rt = this.runtime.get(npId);
-        if (rt?.mounted && rt.audible) {
-          void this.pollMediaMetadata(npId, true);
-        }
-      }, 1000);
+        this.pollFastProgressTargets();
+      }, 350);
     } else if (!shouldRun && this.fastProgressInterval) {
       clearInterval(this.fastProgressInterval);
       this.fastProgressInterval = null;

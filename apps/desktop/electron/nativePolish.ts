@@ -222,62 +222,94 @@ export function buildSetVolumeScript(volume: number): string {
  */
 export const READ_MEDIA_METADATA_SCRIPT = `(function () {
   try {
+    const host = (location.hostname || '').toLowerCase();
     let currentTimeSec = undefined;
     let durationSec = undefined;
+    let isPlaying = false;
+
+    const mainYtVideo =
+      (host.includes('youtube.com') && document.querySelector('video.html5-main-video')) || null;
     const mediaEls = Array.from(document.querySelectorAll('video, audio'));
     const activeEl =
+      (mainYtVideo && Number.isFinite(mainYtVideo.duration) && mainYtVideo.duration > 0 ? mainYtVideo : null) ||
       mediaEls.find((m) => !m.paused && Number.isFinite(m.duration) && m.duration > 0) ||
-      mediaEls.find((m) => Number.isFinite(m.duration) && m.duration > 0 && m.currentTime > 0);
+      mediaEls.find((m) => Number.isFinite(m.duration) && m.duration > 0 && m.currentTime > 0) ||
+      mediaEls.find((m) => Number.isFinite(m.duration) && m.duration > 0);
+
     if (activeEl) {
       currentTimeSec = Math.max(0, Number(activeEl.currentTime) || 0);
       durationSec = Number.isFinite(activeEl.duration) ? Math.max(0, Number(activeEl.duration)) : undefined;
+      isPlaying = Boolean(!activeEl.paused && !activeEl.ended && activeEl.readyState >= 2);
     }
 
-    const ms = navigator.mediaSession && navigator.mediaSession.metadata;
     let likeStatus = 'none';
+    let domTitle = '';
+    let domArtist = '';
+    let domAlbum = '';
+    let domArtwork = '';
+
     try {
-      const host = (location.hostname || '').toLowerCase();
       if (host.includes('music.youtube.com')) {
-        const likeBtn =
-          document.querySelector('ytmusic-player-bar ytmusic-like-button-renderer #button-shape-like button') ||
-          document.querySelector('ytmusic-player-bar ytmusic-like-button-renderer .like button') ||
-          document.querySelector('ytmusic-player-bar button[aria-label="Like"], ytmusic-player-bar button[aria-label="Remove like"]');
-        const dislikeBtn =
-          document.querySelector('ytmusic-player-bar ytmusic-like-button-renderer #button-shape-dislike button') ||
-          document.querySelector('ytmusic-player-bar ytmusic-like-button-renderer .dislike button') ||
-          document.querySelector('ytmusic-player-bar button[aria-label="Dislike"], ytmusic-player-bar button[aria-label="Remove dislike"]');
-        const likePressed = likeBtn && (likeBtn.getAttribute('aria-pressed') === 'true' || /remove like/i.test(likeBtn.getAttribute('aria-label') || ''));
-        const dislikePressed = dislikeBtn && (dislikeBtn.getAttribute('aria-pressed') === 'true' || /remove dislike/i.test(dislikeBtn.getAttribute('aria-label') || ''));
-        if (likePressed) likeStatus = 'like';
-        else if (dislikePressed) likeStatus = 'dislike';
+        const bar = document.querySelector('ytmusic-player-bar');
+        if (bar) {
+          const titleEl = bar.querySelector('.title.ytmusic-player-bar, yt-formatted-string.title');
+          if (titleEl && titleEl.textContent) domTitle = titleEl.textContent.trim();
+
+          const bylineEl = bar.querySelector('.byline.ytmusic-player-bar, yt-formatted-string.byline');
+          if (bylineEl) {
+            const links = Array.from(bylineEl.querySelectorAll('a'));
+            if (links.length > 0 && links[0].textContent) {
+              domArtist = links[0].textContent.trim();
+            } else if (bylineEl.textContent) {
+              domArtist = bylineEl.textContent.split(/[•·]/)[0].trim();
+            }
+            if (links.length > 1 && links[1].textContent) {
+              domAlbum = links[1].textContent.trim();
+            }
+          }
+
+          const imgEl = bar.querySelector('img.image.ytmusic-player-bar, .thumbnail-image-wrapper img');
+          if (imgEl && imgEl.src && /^https?:\/\//i.test(imgEl.src)) {
+            domArtwork = imgEl.src;
+          }
+
+          const likeBtn =
+            bar.querySelector('ytmusic-like-button-renderer #button-shape-like button') ||
+            bar.querySelector('ytmusic-like-button-renderer .like button') ||
+            bar.querySelector('button[aria-label="Like"], button[aria-label="Remove like"]');
+          const dislikeBtn =
+            bar.querySelector('ytmusic-like-button-renderer #button-shape-dislike button') ||
+            bar.querySelector('ytmusic-like-button-renderer .dislike button') ||
+            bar.querySelector('button[aria-label="Dislike"], button[aria-label="Remove dislike"]');
+          const likePressed = likeBtn && (likeBtn.getAttribute('aria-pressed') === 'true' || /remove like/i.test(likeBtn.getAttribute('aria-label') || ''));
+          const dislikePressed = dislikeBtn && (dislikeBtn.getAttribute('aria-pressed') === 'true' || /remove dislike/i.test(dislikeBtn.getAttribute('aria-label') || ''));
+          if (likePressed) likeStatus = 'like';
+          else if (dislikePressed) likeStatus = 'dislike';
+        }
       }
     } catch {}
 
-    if (ms && (ms.title || ms.artist)) {
-      let artworkUrl = '';
-      if (Array.isArray(ms.artwork) && ms.artwork.length > 0) {
-        const best = ms.artwork[ms.artwork.length - 1] || ms.artwork[0];
-        if (best && typeof best.src === 'string') artworkUrl = best.src;
-      }
-      return {
-        title: String(ms.title || '').trim(),
-        artist: String(ms.artist || '').trim(),
-        album: String(ms.album || '').trim(),
-        artworkUrl: artworkUrl,
-        currentTimeSec,
-        durationSec,
-        likeStatus
-      };
+    const ms = navigator.mediaSession && navigator.mediaSession.metadata;
+    let msArtwork = '';
+    if (ms && Array.isArray(ms.artwork) && ms.artwork.length > 0) {
+      const best = ms.artwork[ms.artwork.length - 1] || ms.artwork[0];
+      if (best && typeof best.src === 'string') msArtwork = best.src;
     }
 
-    if (typeof currentTimeSec === 'number') {
+    const title = domTitle || (ms && ms.title ? String(ms.title).trim() : '');
+    const artist = domArtist || (ms && ms.artist ? String(ms.artist).trim() : '');
+    const album = domAlbum || (ms && ms.album ? String(ms.album).trim() : '');
+    const artworkUrl = domArtwork || msArtwork;
+
+    if (title || artist || typeof currentTimeSec === 'number') {
       return {
-        title: '',
-        artist: '',
-        album: '',
-        artworkUrl: '',
+        title,
+        artist,
+        album,
+        artworkUrl,
         currentTimeSec,
         durationSec,
+        isPlaying,
         likeStatus
       };
     }

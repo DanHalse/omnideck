@@ -97,8 +97,11 @@ export function NowPlayingHub({
   const [aiMessages, setAiMessages] = useState<
     Array<{ id: string; q: string; a: string; error?: string }>
   >([]);
+  const [lyricOffsetSec, setLyricOffsetSec] = useState(0);
+  const [clockTick, setClockTick] = useState(0);
 
   const activeLyricRef = useRef<HTMLDivElement | null>(null);
+  const prevTrackIdentityRef = useRef<string>('');
 
   const musicServiceId =
     nowPlaying.serviceId === 'spotify' || nowPlaying.serviceId === 'youtube-music'
@@ -108,6 +111,35 @@ export function NowPlayingHub({
   const currentService = services.find((s) => s.id === (nowPlaying.serviceId ?? 'youtube-music'));
   const hasTrack = Boolean(nowPlaying.serviceId && nowPlaying.title);
   const trackIdentity = `${nowPlaying.serviceId ?? ''}::${nowPlaying.title ?? ''}::${nowPlaying.artist ?? ''}::${aiConfig.provider}::${aiConfig.autoEnrich}`;
+  const durationBucket =
+    typeof nowPlaying.durationSec === 'number' && nowPlaying.durationSec > 10
+      ? Math.round(nowPlaying.durationSec / 6) * 6
+      : 0;
+
+  // Smooth 200ms local clock tick while playing so lyrics & progress stay fluid between IPC polls
+  useEffect(() => {
+    if (!nowPlaying.playing || typeof nowPlaying.currentTimeSec !== 'number') return;
+    const timer = setInterval(() => setClockTick((t) => (t + 1) % 10000), 200);
+    return () => clearInterval(timer);
+  }, [nowPlaying.playing, nowPlaying.currentTimeSec, nowPlaying.playbackSyncedAt]);
+
+  const liveTimeSec = useMemo(() => {
+    if (typeof nowPlaying.currentTimeSec !== 'number') return undefined;
+    if (!nowPlaying.playing || typeof nowPlaying.playbackSyncedAt !== 'number') {
+      return nowPlaying.currentTimeSec;
+    }
+    const elapsed = Math.min(1.2, Math.max(0, (Date.now() - nowPlaying.playbackSyncedAt) / 1000));
+    const est = nowPlaying.currentTimeSec + elapsed;
+    return typeof nowPlaying.durationSec === 'number' && nowPlaying.durationSec > 0
+      ? Math.min(nowPlaying.durationSec, est)
+      : est;
+  }, [
+    nowPlaying.currentTimeSec,
+    nowPlaying.durationSec,
+    nowPlaying.playing,
+    nowPlaying.playbackSyncedAt,
+    clockTick,
+  ]);
 
   // Stop any inline 30s preview audio on unmount
   useEffect(() => {
@@ -119,16 +151,24 @@ export function NowPlayingHub({
     };
   }, []);
 
-  // Auto-load dossier whenever the playing track or artist changes
+  // Auto-load dossier whenever the playing track/artist changes (or duration resolves for exact lyric matching)
   useEffect(() => {
     if (!hasTrack) {
+      prevTrackIdentityRef.current = '';
       setDossier(null);
+      setLyricOffsetSec(0);
       return;
     }
+    const isSameTrackRefinement = prevTrackIdentityRef.current === trackIdentity;
+    prevTrackIdentityRef.current = trackIdentity;
+
     let cancelled = false;
-    setLoading(true);
-    setExpandedBandId(null);
-    setAiMessages([]);
+    if (!isSameTrackRefinement) {
+      setLoading(true);
+      setExpandedBandId(null);
+      setAiMessages([]);
+      setLyricOffsetSec(0);
+    }
 
     void onLoadDossier({
       serviceId: nowPlaying.serviceId!,
@@ -143,19 +183,19 @@ export function NowPlayingHub({
       })
       .catch(() => {})
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && !isSameTrackRefinement) setLoading(false);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [trackIdentity]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [trackIdentity, durationBucket]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const activeLyricIdx = useMemo(() => {
     if (!dossier?.lyrics?.synced || !dossier.lyrics.lines.length) return -1;
-    if (typeof nowPlaying.currentTimeSec !== 'number') return -1;
-    return findActiveLyricIndex(dossier.lyrics.lines, nowPlaying.currentTimeSec);
-  }, [dossier?.lyrics, nowPlaying.currentTimeSec]);
+    if (typeof liveTimeSec !== 'number') return -1;
+    return findActiveLyricIndex(dossier.lyrics.lines, Math.max(0, liveTimeSec + lyricOffsetSec));
+  }, [dossier?.lyrics, liveTimeSec, lyricOffsetSec]);
 
   useEffect(() => {
     if (activeLyricRef.current && (tab === 'lyrics' || mode === 'stage')) {
@@ -261,10 +301,10 @@ export function NowPlayingHub({
   };
 
   const progressPct =
-    typeof nowPlaying.currentTimeSec === 'number' &&
+    typeof liveTimeSec === 'number' &&
     typeof nowPlaying.durationSec === 'number' &&
     nowPlaying.durationSec > 0
-      ? Math.min(100, Math.max(0, (nowPlaying.currentTimeSec / nowPlaying.durationSec) * 100))
+      ? Math.min(100, Math.max(0, (liveTimeSec / nowPlaying.durationSec) * 100))
       : 0;
 
   const artwork = dossier?.artworkUrl || nowPlaying.artworkUrl;
@@ -496,21 +536,50 @@ export function NowPlayingHub({
       {loading && !dossier ? (
         <div className="np-empty">Fetching synced lyrics…</div>
       ) : dossier?.lyrics?.synced && dossier.lyrics.lines.length > 0 ? (
-        <div className="np-lyrics-list">
-          {dossier.lyrics.lines.map((line, idx) => {
-            const isActive = idx === activeLyricIdx;
-            const isPast = activeLyricIdx >= 0 && idx < activeLyricIdx;
-            return (
-              <div
-                key={`${line.timeSec}-${idx}`}
-                ref={isActive ? activeLyricRef : undefined}
-                className={`np-lyric-line ${isActive ? 'np-lyric-line--active' : ''} ${isPast ? 'np-lyric-line--past' : ''}`}
-              >
-                {line.text}
-              </div>
-            );
-          })}
-        </div>
+        <>
+          <div className="np-lyrics-toolbar" role="group" aria-label="Lyric sync offset">
+            <span className="np-lyrics-toolbar__label">Sync</span>
+            <button
+              type="button"
+              className="pill-btn np-lyrics-toolbar__btn"
+              title="Delay lyrics by 0.5s"
+              onClick={() => setLyricOffsetSec((v) => Math.round((v - 0.5) * 10) / 10)}
+            >
+              −0.5s
+            </button>
+            <button
+              type="button"
+              className={`pill-btn np-lyrics-toolbar__btn ${lyricOffsetSec !== 0 ? 'pill-btn--active' : ''}`}
+              title="Reset lyric sync offset to 0.0s"
+              onClick={() => setLyricOffsetSec(0)}
+            >
+              {lyricOffsetSec > 0 ? `+${lyricOffsetSec.toFixed(1)}s` : `${lyricOffsetSec.toFixed(1)}s`}
+            </button>
+            <button
+              type="button"
+              className="pill-btn np-lyrics-toolbar__btn"
+              title="Advance lyrics by 0.5s"
+              onClick={() => setLyricOffsetSec((v) => Math.round((v + 0.5) * 10) / 10)}
+            >
+              +0.5s
+            </button>
+          </div>
+          <div className="np-lyrics-list">
+            {dossier.lyrics.lines.map((line, idx) => {
+              const isActive = idx === activeLyricIdx;
+              const isPast = activeLyricIdx >= 0 && idx < activeLyricIdx;
+              return (
+                <div
+                  key={`${line.timeSec}-${idx}`}
+                  ref={isActive ? activeLyricRef : undefined}
+                  className={`np-lyric-line ${isActive ? 'np-lyric-line--active' : ''} ${isPast ? 'np-lyric-line--past' : ''}`}
+                >
+                  {line.text}
+                </div>
+              );
+            })}
+          </div>
+        </>
       ) : dossier?.lyrics?.plainText ? (
         <pre className="np-lyrics-plain">{dossier.lyrics.plainText}</pre>
       ) : (
@@ -675,7 +744,7 @@ export function NowPlayingHub({
                   <div className="np-progress__fill" style={{ width: `${progressPct}%` }} />
                 </div>
                 <div className="np-progress__times">
-                  <span>{formatSec(nowPlaying.currentTimeSec)}</span>
+                  <span>{formatSec(liveTimeSec)}</span>
                   <span>{formatSec(nowPlaying.durationSec)}</span>
                 </div>
               </div>

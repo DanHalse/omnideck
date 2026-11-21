@@ -15,7 +15,7 @@ import {
 
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_CACHE_ENTRIES = 120;
-const USER_AGENT = 'OmniDeck/1.4.0 (https://github.com/DanHalse/omnideck)';
+const USER_AGENT = 'OmniDeck/1.4.3 (https://github.com/DanHalse/omnideck)';
 
 interface CacheFileShape {
   dossiers: Record<string, ArtistDossier>;
@@ -305,9 +305,52 @@ async function fetchSyncedLyrics(
   }
 
   interface LrcLibRecord {
+    trackName?: string;
+    artistName?: string;
+    albumName?: string;
+    duration?: number;
     syncedLyrics?: string | null;
     plainLyrics?: string | null;
   }
+
+  const pickBestMatch = (records: LrcLibRecord[]): LrcLibRecord | null => {
+    if (!records.length) return null;
+    const targetArtist = artistName.toLowerCase();
+    const targetTrack = trackTitle.toLowerCase();
+
+    let best: LrcLibRecord | null = null;
+    let bestScore = -Infinity;
+
+    for (const item of records) {
+      let score = 0;
+      if (item.syncedLyrics) score += 100;
+      else if (item.plainLyrics) score += 20;
+      else continue;
+
+      const itemArtist = (item.artistName || '').toLowerCase();
+      const itemTrack = (item.trackName || '').toLowerCase();
+      if (targetArtist && itemArtist === targetArtist) score += 35;
+      else if (targetArtist && (itemArtist.includes(targetArtist) || targetArtist.includes(itemArtist))) score += 18;
+
+      if (targetTrack && itemTrack === targetTrack) score += 35;
+      else if (targetTrack && (itemTrack.includes(targetTrack) || targetTrack.includes(itemTrack))) score += 15;
+
+      // Strongly prefer versions whose duration matches the actual playing track (avoids live/intro/extended drift)
+      if (typeof durationSec === 'number' && durationSec > 10 && typeof item.duration === 'number' && item.duration > 10) {
+        const diff = Math.abs(item.duration - durationSec);
+        if (diff <= 2) score += 60;
+        else if (diff <= 5) score += 35;
+        else if (diff <= 10) score += 10;
+        else score -= Math.min(80, diff * 1.5);
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = item;
+      }
+    }
+    return best;
+  };
 
   const params = new URLSearchParams();
   params.set('track_name', trackTitle);
@@ -317,17 +360,28 @@ async function fetchSyncedLyrics(
 
   let record = await fetchJson<LrcLibRecord>(
     `https://lrclib.net/api/get?${params.toString()}`,
-    { timeoutMs: 4500 },
+    { timeoutMs: 4000 },
   );
 
-  if (!record || (!record.syncedLyrics && !record.plainLyrics)) {
+  // If /api/get missed OR returned a version whose duration differs by >5s, search and rank by duration proximity
+  const durationMismatch =
+    Boolean(
+      record &&
+        typeof durationSec === 'number' &&
+        durationSec > 10 &&
+        typeof record.duration === 'number' &&
+        Math.abs(record.duration - durationSec) > 5,
+    );
+
+  if (!record || !record.syncedLyrics || durationMismatch) {
     const q = [artistName, trackTitle].filter(Boolean).join(' ');
     const list = await fetchJson<LrcLibRecord[]>(
       `https://lrclib.net/api/search?q=${encodeURIComponent(q)}`,
       { timeoutMs: 4500 },
     );
     if (Array.isArray(list) && list.length > 0) {
-      record = list.find((item) => Boolean(item.syncedLyrics)) ?? list[0];
+      const candidate = pickBestMatch(record ? [record, ...list] : list);
+      if (candidate) record = candidate;
     }
   }
 
@@ -465,11 +519,42 @@ export class MusicIntelService {
   private readonly cachePath: string;
   private cache: CacheFileShape;
   private inflight = new Map<string, Promise<ArtistDossier>>();
+  private lyricsCache = new Map<string, SyncedLyricsResult>();
 
   constructor(customCachePath?: string) {
     this.cachePath =
       customCachePath ?? path.join(app.getPath('userData'), 'omnideck-music-cache.json');
     this.cache = this.loadCache();
+  }
+
+  /**
+   * Fast LRCLIB-only lookup (bypasses Wikipedia/MusicBrainz/Deezer) so the Floating Mini-Player HUD
+   * gets duration-matched synced lyrics within ~150ms of a song change.
+   */
+  async getSyncedLyricsFast(input: {
+    title: string;
+    artist?: string;
+    album?: string;
+    durationSec?: number;
+  }): Promise<SyncedLyricsResult> {
+    const cleaned = cleanTrackAndArtist(input.title, input.artist);
+    const trackTitle = cleaned.track || input.title.trim();
+    const artistName = cleaned.artist || input.artist?.trim() || '';
+    const durBucket =
+      typeof input.durationSec === 'number' && input.durationSec > 10
+        ? Math.round(input.durationSec / 4) * 4
+        : 0;
+    const key = `${artistName.toLowerCase()}::${trackTitle.toLowerCase()}::${durBucket}`;
+    const hit = this.lyricsCache.get(key);
+    if (hit) return hit;
+
+    const res = await fetchSyncedLyrics(artistName, trackTitle, input.album, input.durationSec);
+    if (this.lyricsCache.size > 150) {
+      const oldest = this.lyricsCache.keys().next().value;
+      if (oldest) this.lyricsCache.delete(oldest);
+    }
+    this.lyricsCache.set(key, res);
+    return res;
   }
 
   async getArtistDossier(
@@ -488,7 +573,11 @@ export class MusicIntelService {
     const trackTitle = cleaned.track || input.title.trim();
     const artistName = cleaned.artist || input.artist?.trim() || '';
     const aiTag = aiConfig.provider !== 'none' && aiConfig.autoEnrich ? aiConfig.provider : 'free';
-    const queryKey = `${artistName.toLowerCase()}::${trackTitle.toLowerCase()}::${aiTag}`;
+    const durBucket =
+      typeof input.durationSec === 'number' && input.durationSec > 10
+        ? Math.round(input.durationSec / 6) * 6
+        : 0;
+    const queryKey = `${artistName.toLowerCase()}::${trackTitle.toLowerCase()}::${durBucket}::${aiTag}`;
 
     if (!input.forceRefresh) {
       const cached = this.cache.dossiers[queryKey];

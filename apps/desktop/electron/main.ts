@@ -159,7 +159,7 @@ function sendUiCommand(command: UiCommandEvent): void {
   }
 }
 
-let lastMiniLyricsKey = '';
+let lastMiniLyricsFetchKey = '';
 
 function broadcastSnapshot(snapshot: DesktopSnapshot): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -167,7 +167,7 @@ function broadcastSnapshot(snapshot: DesktopSnapshot): void {
   }
   miniPlayer?.broadcast(snapshot);
 
-  // When Floating Mini-Player HUD is open and song changes, auto-fetch synced lyrics in background
+  // When Floating Mini-Player HUD is open and song changes (or duration resolves), fast-fetch synced lyrics (~150ms)
   const np = snapshot.nowPlaying;
   if (
     miniPlayer?.isOpen() &&
@@ -175,26 +175,27 @@ function broadcastSnapshot(snapshot: DesktopSnapshot): void {
     (np.serviceId === 'youtube-music' || np.serviceId === 'spotify') &&
     np.title
   ) {
-    const trackKey = `${np.serviceId}::${np.title.toLowerCase()}`;
-    if (trackKey !== lastMiniLyricsKey) {
-      lastMiniLyricsKey = trackKey;
-      const aiCfg = store?.get().settings.aiCompanion ?? mergeAiCompanionConfig(null);
+    const canonicalTrackKey = `${np.serviceId}::${np.title.toLowerCase()}`;
+    const durBucket =
+      typeof np.durationSec === 'number' && np.durationSec > 10
+        ? Math.round(np.durationSec / 4) * 4
+        : 0;
+    const fetchKey = `${canonicalTrackKey}::${durBucket}`;
+    if (fetchKey !== lastMiniLyricsFetchKey) {
+      lastMiniLyricsFetchKey = fetchKey;
       if (!musicIntel) musicIntel = new MusicIntelService();
       void musicIntel
-        .getArtistDossier(
-          {
-            serviceId: np.serviceId,
-            title: np.title,
-            artist: np.artist,
-            album: np.album,
-            artworkUrl: np.artworkUrl,
-            durationSec: np.durationSec,
-          },
-          { ...aiCfg, autoEnrich: false },
-        )
-        .then((dossier) => {
-          if (dossier.lyrics?.synced && dossier.lyrics.lines.length > 0) {
-            viewManager?.setActiveLyrics(trackKey, dossier.lyrics.lines);
+        .getSyncedLyricsFast({
+          title: np.title,
+          artist: np.artist,
+          album: np.album,
+          durationSec: np.durationSec,
+        })
+        .then((lyrics) => {
+          // Ignore stale responses if the song has already moved on
+          if (lastMiniLyricsFetchKey !== fetchKey) return;
+          if (lyrics.synced && lyrics.lines.length > 0) {
+            viewManager?.setActiveLyrics(canonicalTrackKey, lyrics.lines);
           }
         })
         .catch(() => {});

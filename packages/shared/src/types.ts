@@ -341,6 +341,7 @@ export interface NowPlayingState {
   autoPausedServiceId: string | null;
   currentTimeSec?: number;
   durationSec?: number;
+  playbackSyncedAt?: number;
   currentLyricLine?: string;
   duckedServiceIds?: string[];
   likeStatus?: 'like' | 'dislike' | 'none';
