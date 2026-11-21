@@ -710,16 +710,28 @@ function registerIpcHandlers(): void {
     viewManager?.reload(serviceId, hard),
   );
   ipcMain.handle('omnideck:go-home', (_e, serviceId: string) => viewManager?.goHome(serviceId));
-  ipcMain.handle('omnideck:toggle-mute', (_e, serviceId: string) =>
-    viewManager?.toggleMute(serviceId),
-  );
+  const keepMiniPlayerOnTop = () => {
+    if (!miniPlayer?.isOpen()) return;
+    miniPlayer.ensureOnTop();
+    setTimeout(() => {
+      if (miniPlayer?.isOpen()) miniPlayer.ensureOnTop();
+    }, 220);
+  };
+
+  ipcMain.handle('omnideck:toggle-mute', (_e, serviceId: string) => {
+    const res = viewManager?.toggleMute(serviceId);
+    keepMiniPlayerOnTop();
+    return res;
+  });
   ipcMain.handle('omnideck:mute-all', () => viewManager?.muteAll());
 
   ipcMain.handle('omnideck:set-volume', (_e, serviceId: string, volume: number) => {
     if (!store || !viewManager) return null;
     const applied = viewManager.setVolume(serviceId, volume);
     const updated = store.set(setServiceVolume(store.get(), serviceId, applied));
-    return viewManager.syncConfig(updated);
+    const res = viewManager.syncConfig(updated);
+    keepMiniPlayerOnTop();
+    return res;
   });
 
   ipcMain.handle('omnideck:set-zoom', (_e, serviceId: string, zoomFactor: number) => {
@@ -781,13 +793,6 @@ function registerIpcHandlers(): void {
   });
 
   // Unified Media, Smart Audio, Sleep Timer, Audible Dock & PiP
-  const keepMiniPlayerOnTop = () => {
-    if (!miniPlayer?.isOpen()) return;
-    miniPlayer.ensureOnTop();
-    setTimeout(() => {
-      if (miniPlayer?.isOpen()) miniPlayer.ensureOnTop();
-    }, 220);
-  };
   ipcMain.handle('omnideck:media-play-pause', async (_e, serviceId?: string) => {
     const res = await viewManager?.runMediaAction('play-pause', serviceId);
     keepMiniPlayerOnTop();

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { DesktopSnapshot } from '@omnideck/shared';
 import { getOmniDeckApi } from '../api';
 import { ServiceIcon } from './ServiceIcon';
@@ -13,11 +13,17 @@ import {
   SwapIcon,
   ThumbDownIcon,
   ThumbUpIcon,
+  VolumeIcon,
+  VolumeOffIcon,
 } from './Icons';
 
 export function MiniPlayerApp() {
   const api = useMemo(() => getOmniDeckApi(), []);
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
+  const [dragVolume, setDragVolume] = useState<number | null>(null);
+  const lastSentAtRef = useRef(0);
+  const pendingVolRef = useRef<{ serviceId: string; volume: number } | null>(null);
+  const flushTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -30,6 +36,9 @@ export function MiniPlayerApp() {
     return () => {
       active = false;
       unsub();
+      if (flushTimerRef.current !== null) {
+        window.clearTimeout(flushTimerRef.current);
+      }
     };
   }, [api]);
 
@@ -42,6 +51,50 @@ export function MiniPlayerApp() {
   const svc = np?.serviceId
     ? snapshot?.config.services.find((s) => s.id === np.serviceId)
     : undefined;
+  const volumeServiceId =
+    np?.serviceId ??
+    (snapshot?.config.services.some((s) => s.id === 'youtube-music') ? 'youtube-music' : undefined);
+  const volumeSvc = volumeServiceId
+    ? snapshot?.config.services.find((s) => s.id === volumeServiceId)
+    : undefined;
+  const volumeRt = volumeServiceId ? snapshot?.runtime[volumeServiceId] : undefined;
+  const isMuted = Boolean(volumeRt?.muted);
+  const liveVolume =
+    typeof volumeRt?.volume === 'number'
+      ? volumeRt.volume
+      : typeof volumeSvc?.volume === 'number'
+        ? volumeSvc.volume
+        : 1.0;
+  const effectiveVolume = dragVolume !== null ? dragVolume : isMuted ? 0 : liveVolume;
+  const volumePct = Math.round(Math.min(1, Math.max(0, effectiveVolume)) * 100);
+
+  const sendVolumeThrottled = (serviceId: string, nextVol: number, immediate = false) => {
+    const clamped = Math.min(1, Math.max(0, Math.round(nextVol * 100) / 100));
+    const now = Date.now();
+    if (immediate || now - lastSentAtRef.current >= 45) {
+      if (flushTimerRef.current !== null) {
+        window.clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
+      }
+      pendingVolRef.current = null;
+      lastSentAtRef.current = now;
+      void api.setVolume(serviceId, clamped);
+      return;
+    }
+    pendingVolRef.current = { serviceId, volume: clamped };
+    if (flushTimerRef.current === null) {
+      flushTimerRef.current = window.setTimeout(() => {
+        flushTimerRef.current = null;
+        const pending = pendingVolRef.current;
+        pendingVolRef.current = null;
+        if (pending) {
+          lastSentAtRef.current = Date.now();
+          void api.setVolume(pending.serviceId, pending.volume);
+        }
+      }, 45);
+    }
+  };
+
   const showThumbs = np?.serviceId === 'youtube-music' || np?.serviceId === 'youtube';
   const isMusicService = np?.serviceId === 'youtube-music' || np?.serviceId === 'spotify';
   const bridgeTargetId = np?.serviceId === 'spotify' ? 'youtube-music' : 'spotify';
@@ -189,8 +242,63 @@ export function MiniPlayerApp() {
               </button>
             </div>
           </div>
+
+          {volumeServiceId && (
+            <div
+              className="mini-hud__volume"
+              title={`${volumeSvc?.name ?? 'YouTube Music'} volume (${isMuted || volumePct === 0 ? 'Muted' : `${volumePct}%`}) — scroll or drag`}
+              onWheel={(e) => {
+                e.preventDefault();
+                const delta = e.deltaY < 0 ? 0.05 : -0.05;
+                const base = isMuted ? 0 : liveVolume;
+                const next = Math.min(1, Math.max(0, Math.round((base + delta) * 100) / 100));
+                sendVolumeThrottled(volumeServiceId, next, true);
+              }}
+            >
+              <button
+                type="button"
+                className={`icon-btn mini-hud__volume-btn ${isMuted || volumePct === 0 ? 'mini-hud__volume-btn--muted' : ''}`}
+                aria-label={isMuted || volumePct === 0 ? 'Unmute' : 'Mute'}
+                title={isMuted || volumePct === 0 ? `Unmute ${volumeSvc?.name ?? 'audio'}` : `Mute ${volumeSvc?.name ?? 'audio'}`}
+                onClick={() => {
+                  if (!isMuted && liveVolume <= 0.005) {
+                    sendVolumeThrottled(volumeServiceId, 0.5, true);
+                  } else {
+                    void api.toggleMute(volumeServiceId);
+                  }
+                }}
+              >
+                {isMuted || volumePct === 0 ? <VolumeOffIcon size={12} /> : <VolumeIcon size={12} />}
+              </button>
+              <input
+                type="range"
+                className="mini-hud__volume-slider"
+                min={0}
+                max={100}
+                step={1}
+                value={volumePct}
+                aria-label={`${volumeSvc?.name ?? 'YouTube Music'} volume`}
+                style={{ '--vol-pct': `${volumePct}%` } as CSSProperties}
+                onChange={(e) => {
+                  const next = Number(e.target.value) / 100;
+                  setDragVolume(next);
+                  sendVolumeThrottled(volumeServiceId, next, false);
+                }}
+                onPointerUp={(e) => {
+                  const next = Number(e.currentTarget.value) / 100;
+                  sendVolumeThrottled(volumeServiceId, next, true);
+                  setDragVolume(null);
+                }}
+                onBlur={() => setDragVolume(null)}
+              />
+              <span className="mini-hud__volume-pct">
+                {isMuted ? 'Mute' : `${volumePct}%`}
+              </span>
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
 }
+
