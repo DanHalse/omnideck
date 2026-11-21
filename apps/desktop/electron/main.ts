@@ -547,16 +547,25 @@ function buildApplicationMenu(): void {
 }
 
 function refreshTrayMenu(): void {
-  if (!tray || !store || !viewManager) return;
+  if (
+    !tray ||
+    tray.isDestroyed() ||
+    !store ||
+    !viewManager ||
+    !mainWindow ||
+    mainWindow.isDestroyed()
+  ) {
+    return;
+  }
   const cfg = store.get();
   const visible = getVisibleServices(cfg);
   const snapshot = viewManager.getSnapshot();
 
   const items: Electron.MenuItemConstructorOptions[] = [
     {
-      label: mainWindow?.isVisible() ? 'Hide OmniDeck' : 'Show OmniDeck',
+      label: mainWindow.isVisible() ? 'Hide OmniDeck' : 'Show OmniDeck',
       click: () => {
-        if (!mainWindow) return;
+        if (!mainWindow || mainWindow.isDestroyed()) return;
         if (mainWindow.isVisible()) {
           mainWindow.hide();
         } else {
@@ -577,8 +586,10 @@ function refreshTrayMenu(): void {
       label: 'OmniDeck Home',
       click: () => {
         viewManager?.setHomeActive(true);
-        mainWindow?.show();
-        mainWindow?.focus();
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.show();
+          mainWindow.focus();
+        }
       },
     },
     ...visible.map((svc) => {
@@ -593,8 +604,10 @@ function refreshTrayMenu(): void {
           viewManager.setHomeActive(false);
           const updated = store.set(selectActiveService(store.get(), svc.id));
           viewManager.syncConfig(updated);
-          mainWindow?.show();
-          mainWindow?.focus();
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.show();
+            mainWindow.focus();
+          }
         },
       };
     }),
@@ -639,7 +652,7 @@ function createTray(): void {
     tray = new Tray(icon);
     tray.setToolTip(`OmniDeck v${app.getVersion()} — Multi-Service Media Hub`);
     tray.on('click', () => {
-      if (!mainWindow) return;
+      if (!mainWindow || mainWindow.isDestroyed()) return;
       if (mainWindow.isVisible()) {
         mainWindow.focus();
       } else {
@@ -797,15 +810,15 @@ function registerIpcHandlers(): void {
 
   // Native Frameless Window Controls
   ipcMain.handle('omnideck:window-minimize', () => {
-    mainWindow?.minimize();
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.minimize();
   });
   ipcMain.handle('omnideck:window-toggle-maximize', () => {
-    if (!mainWindow) return;
+    if (!mainWindow || mainWindow.isDestroyed()) return;
     if (mainWindow.isMaximized()) mainWindow.unmaximize();
     else mainWindow.maximize();
   });
   ipcMain.handle('omnideck:window-close', () => {
-    mainWindow?.close();
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
   });
 
   // Ad & Tracker Shield
@@ -1257,12 +1270,14 @@ async function createMainWindow(drmStatus: DrmStatus): Promise<void> {
   });
 
   mainWindow.on('closed', () => {
-    updateManager?.stopSchedule();
-    miniPlayer?.dispose();
-    miniPlayer = null;
-    viewManager?.dispose();
-    viewManager = null;
     mainWindow = null;
+    const mp = miniPlayer;
+    miniPlayer = null;
+    const vm = viewManager;
+    viewManager = null;
+    updateManager?.stopSchedule();
+    mp?.dispose();
+    vm?.dispose();
   });
 
   const devUrl = process.env.VITE_DEV_SERVER_URL;
@@ -1280,7 +1295,7 @@ if (!gotSingleInstanceLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();
       mainWindow.focus();
@@ -1301,6 +1316,10 @@ if (!gotSingleInstanceLock) {
     syncGlobalSummonShortcut('');
     syncGlobalLikeShortcut('');
     updateManager?.stopSchedule();
+    if (tray && !tray.isDestroyed()) {
+      tray.destroy();
+      tray = null;
+    }
   });
 
   app.on('before-quit', (event) => {

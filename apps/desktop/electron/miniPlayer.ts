@@ -12,6 +12,7 @@ interface SavedMiniBounds {
 export class MiniPlayerManager {
   private win: BrowserWindow | null = null;
   private lastBounds: SavedMiniBounds | null = null;
+  private disposed = false;
   private readonly onStateChanged: () => void;
 
   constructor(onStateChanged: () => void) {
@@ -105,7 +106,9 @@ export class MiniPlayerManager {
 
     miniWin.on('closed', () => {
       this.win = null;
-      this.onStateChanged();
+      if (!this.disposed) {
+        this.onStateChanged();
+      }
     });
 
     miniWin.webContents.on('did-finish-load', () => {
@@ -133,7 +136,9 @@ export class MiniPlayerManager {
       this.win.close();
     }
     this.win = null;
-    this.onStateChanged();
+    if (!this.disposed) {
+      this.onStateChanged();
+    }
   }
 
   toggle(snapshot?: DesktopSnapshot): boolean {
@@ -152,9 +157,11 @@ export class MiniPlayerManager {
   }
 
   dispose(): void {
-    if (this.win && !this.win.isDestroyed()) {
-      this.win.destroy();
-    }
+    this.disposed = true;
+    const w = this.win;
     this.win = null;
+    if (w && !w.isDestroyed()) {
+      w.destroy();
+    }
   }
 }
