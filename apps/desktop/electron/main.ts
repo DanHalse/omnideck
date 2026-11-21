@@ -12,6 +12,8 @@ import electron, {
   screen,
 } from 'electron';
 import {
+  addBlockedMusicEntry,
+  addBookNote,
   addCustomService,
   applyWorkspace,
   buildServiceSearchUrl,
@@ -20,10 +22,13 @@ import {
   getVisibleServices,
   mergeAiCompanionConfig,
   mergeEqualizerConfig,
+  mergeIntegrationsConfig,
   mergePowerUpsConfig,
   moveServiceById,
   parseImportedConfig,
   pinFavorite,
+  removeBlockedMusicEntry,
+  removeBookNote,
   removeCustomService,
   removeFavorite,
   reorderServices,
@@ -45,6 +50,7 @@ import {
   type DesktopSnapshot,
   type DrmStatus,
   type EqualizerConfig,
+  type IntegrationsConfig,
   type PowerUpsConfig,
   type ServiceDefinition,
   type WindowBounds,
@@ -55,6 +61,7 @@ import { UpdateManager } from './updater.js';
 import { MusicIntelService } from './musicIntel.js';
 import { ListeningStatsStore } from './listeningStats.js';
 import { MiniPlayerManager } from './miniPlayer.js';
+import { IntegrationsManager, TaskbarControlsManager } from './integrations.js';
 import type { UiCommandEvent } from './ipcTypes.js';
 
 app.setName('OmniDeck');
@@ -99,6 +106,8 @@ let updateManager: UpdateManager | null = null;
 let musicIntel: MusicIntelService | null = null;
 let listeningStats: ListeningStatsStore | null = null;
 let miniPlayer: MiniPlayerManager | null = null;
+let integrations: IntegrationsManager | null = null;
+const taskbarControls = new TaskbarControlsManager();
 let forceQuitting = false;
 let audibleFlushedOnQuit = false;
 let mediaKeysRegistered = false;
@@ -202,6 +211,10 @@ function broadcastSnapshot(snapshot: DesktopSnapshot): void {
     }
   }
 
+  taskbarControls.update(mainWindow, snapshot.nowPlaying, (action) => {
+    void viewManager?.runMediaAction(action);
+  });
+  integrations?.onSnapshot(snapshot);
   refreshTrayMenu();
 }
 
@@ -955,6 +968,55 @@ function registerIpcHandlers(): void {
     return viewManager.syncConfig(updated);
   });
 
+  ipcMain.handle('omnideck:update-integrations', (_e, patch: Partial<IntegrationsConfig>) => {
+    if (!store || !viewManager) return null;
+    const cur = store.get();
+    const nextInt = mergeIntegrationsConfig({ ...cur.settings.integrations, ...patch });
+    const updated = store.set({
+      ...cur,
+      settings: { ...cur.settings, integrations: nextInt },
+    });
+    integrations?.updateConfig(nextInt);
+    return viewManager.syncConfig(updated);
+  });
+
+  ipcMain.handle(
+    'omnideck:block-music',
+    (_e, input: { kind: 'artist' | 'track'; value: string; artist?: string }) => {
+      if (!store || !viewManager) return null;
+      const updated = store.set(addBlockedMusicEntry(store.get(), input));
+      const snap = viewManager.syncConfig(updated);
+      viewManager.showToast(`Blocked ${input.kind}: ${input.value}`, 2400);
+      // Immediately skip if the blocked song/artist is currently playing
+      if (snap.nowPlaying.serviceId && snap.nowPlaying.playing) {
+        void viewManager.runMediaAction('next', snap.nowPlaying.serviceId);
+      }
+      return snap;
+    },
+  );
+
+  ipcMain.handle('omnideck:unblock-music', (_e, entryId: string) => {
+    if (!store || !viewManager) return null;
+    const updated = store.set(removeBlockedMusicEntry(store.get(), entryId));
+    return viewManager.syncConfig(updated);
+  });
+
+  ipcMain.handle(
+    'omnideck:add-book-note',
+    (_e, input: { bookTitle: string; timestampLabel: string; note: string; url?: string }) => {
+      if (!store || !viewManager) return null;
+      const updated = store.set(addBookNote(store.get(), input));
+      viewManager.showToast('Saved Audible book note', 2000);
+      return viewManager.syncConfig(updated);
+    },
+  );
+
+  ipcMain.handle('omnideck:remove-book-note', (_e, noteId: string) => {
+    if (!store || !viewManager) return null;
+    const updated = store.set(removeBookNote(store.get(), noteId));
+    return viewManager.syncConfig(updated);
+  });
+
   ipcMain.handle(
     'omnideck:update-service',
     (
@@ -1220,6 +1282,7 @@ async function createMainWindow(drmStatus: DrmStatus): Promise<void> {
     listeningStats,
   );
 
+  integrations = new IntegrationsManager(initialConfig.settings.integrations);
   syncHardwareMediaKeys(initialConfig.settings.hardwareMediaKeys);
   syncGlobalSummonShortcut(initialConfig.settings.globalSummonShortcut);
   syncGlobalLikeShortcut(initialConfig.settings.powerUps.spotifyLikeShortcut);
@@ -1316,6 +1379,8 @@ if (!gotSingleInstanceLock) {
     syncGlobalSummonShortcut('');
     syncGlobalLikeShortcut('');
     updateManager?.stopSchedule();
+    integrations?.dispose();
+    integrations = null;
     if (tray && !tray.isDestroyed()) {
       tray.destroy();
       tray = null;

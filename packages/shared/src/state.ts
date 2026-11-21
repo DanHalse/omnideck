@@ -3,13 +3,19 @@ import { DEFAULT_POWER_UPS, mergePowerUpsConfig } from './powerUps.js';
 import {
   DEFAULT_AI_COMPANION_CONFIG,
   DEFAULT_EQUALIZER_CONFIG,
+  DEFAULT_INTEGRATIONS_CONFIG,
   clampDuckLevel,
   mergeAiCompanionConfig,
   mergeEqualizerConfig,
+  mergeIntegrationsConfig,
+  normalizeBlockedMusic,
+  normalizeBookNotes,
 } from './audio.js';
 import type {
   AppSettings,
   AudioFocusMode,
+  BlockedMusicEntry,
+  BookNoteEntry,
   ChromeInsets,
   CustomServiceInput,
   PersistedConfig,
@@ -22,7 +28,7 @@ import type {
   WorkspacePreset,
 } from './types.js';
 
-export const APP_VERSION = '1.4.5';
+export const APP_VERSION = '1.5.0';
 export const GITHUB_REPO_OWNER = 'DanHalse';
 export const GITHUB_REPO_NAME = 'omnideck';
 export const GITHUB_RELEASES_URL = `https://github.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases`;
@@ -50,9 +56,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
   doNotDisturb: false,
   autoCheckUpdates: true,
   hardwareVideoAcceleration: true,
-  powerUps: { ...DEFAULT_POWER_UPS },
+  powerUps: { ...DEFAULT_POWER_UPS, redditFilteredKeywords: [...DEFAULT_POWER_UPS.redditFilteredKeywords] },
   equalizer: { ...DEFAULT_EQUALIZER_CONFIG, bands: [...DEFAULT_EQUALIZER_CONFIG.bands] },
   aiCompanion: { ...DEFAULT_AI_COMPANION_CONFIG },
+  blockedMusic: [],
+  bookNotes: [],
+  integrations: { ...DEFAULT_INTEGRATIONS_CONFIG },
 };
 
 export const DEFAULT_WORKSPACES: WorkspacePreset[] = [
@@ -102,9 +111,12 @@ export function createDefaultConfig(): PersistedConfig {
     },
     settings: {
       ...DEFAULT_SETTINGS,
-      powerUps: { ...DEFAULT_POWER_UPS },
+      powerUps: { ...DEFAULT_POWER_UPS, redditFilteredKeywords: [...DEFAULT_POWER_UPS.redditFilteredKeywords] },
       equalizer: { ...DEFAULT_EQUALIZER_CONFIG, bands: [...DEFAULT_EQUALIZER_CONFIG.bands] },
       aiCompanion: { ...DEFAULT_AI_COMPANION_CONFIG },
+      blockedMusic: [],
+      bookNotes: [],
+      integrations: { ...DEFAULT_INTEGRATIONS_CONFIG },
     },
     workspaces: DEFAULT_WORKSPACES.map((w) => ({ ...w, serviceIds: [...w.serviceIds] })),
     activeWorkspaceId: 'all',
@@ -296,6 +308,9 @@ export function mergePersistedConfig(raw: unknown): PersistedConfig {
     powerUps: mergePowerUpsConfig(candidate.settings?.powerUps),
     equalizer: mergeEqualizerConfig(candidate.settings?.equalizer),
     aiCompanion: mergeAiCompanionConfig(candidate.settings?.aiCompanion),
+    blockedMusic: normalizeBlockedMusic(candidate.settings?.blockedMusic),
+    bookNotes: normalizeBookNotes(candidate.settings?.bookNotes),
+    integrations: mergeIntegrationsConfig(candidate.settings?.integrations),
   };
 
   let services: ServiceDefinition[] = fallback.services;
@@ -814,6 +829,12 @@ export function serializeConfigForExport(config: PersistedConfig): string {
         ...config.settings.aiCompanion,
         apiKey: '',
       },
+      integrations: {
+        ...config.settings.integrations,
+        listenBrainzToken: '',
+        lastFmApiSecret: '',
+        lastFmSessionKey: '',
+      },
     },
   };
   return JSON.stringify(
@@ -1158,3 +1179,79 @@ export function computeDesktopLayoutBounds(
     dividerX,
   };
 }
+
+export function addBlockedMusicEntry(
+  config: PersistedConfig,
+  input: { kind: 'artist' | 'track'; value: string; artist?: string },
+): PersistedConfig {
+  const value = input.value.trim().slice(0, 140);
+  if (!value) return config;
+  const existing = config.settings.blockedMusic ?? [];
+  const dup = existing.some(
+    (e) => e.kind === input.kind && e.value.toLowerCase() === value.toLowerCase(),
+  );
+  if (dup) return config;
+
+  const entry: BlockedMusicEntry = {
+    id: `blk-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    kind: input.kind,
+    value,
+    artist: input.artist?.trim().slice(0, 120) || undefined,
+    addedAt: Date.now(),
+  };
+
+  return {
+    ...config,
+    settings: {
+      ...config.settings,
+      blockedMusic: [entry, ...existing].slice(0, 250),
+    },
+  };
+}
+
+export function removeBlockedMusicEntry(config: PersistedConfig, entryId: string): PersistedConfig {
+  return {
+    ...config,
+    settings: {
+      ...config.settings,
+      blockedMusic: (config.settings.blockedMusic ?? []).filter((e) => e.id !== entryId),
+    },
+  };
+}
+
+export function addBookNote(
+  config: PersistedConfig,
+  input: { bookTitle: string; timestampLabel: string; note: string; url?: string },
+): PersistedConfig {
+  const bookTitle = input.bookTitle.trim().slice(0, 160);
+  const note = input.note.trim().slice(0, 1000);
+  if (!bookTitle || !note) return config;
+
+  const entry: BookNoteEntry = {
+    id: `note-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    bookTitle,
+    timestampLabel: input.timestampLabel.trim().slice(0, 40) || '0:00',
+    note,
+    url: input.url && /^https?:\/\//i.test(input.url) ? input.url : undefined,
+    createdAt: Date.now(),
+  };
+
+  return {
+    ...config,
+    settings: {
+      ...config.settings,
+      bookNotes: [entry, ...(config.settings.bookNotes ?? [])].slice(0, 250),
+    },
+  };
+}
+
+export function removeBookNote(config: PersistedConfig, noteId: string): PersistedConfig {
+  return {
+    ...config,
+    settings: {
+      ...config.settings,
+      bookNotes: (config.settings.bookNotes ?? []).filter((n) => n.id !== noteId),
+    },
+  };
+}
+

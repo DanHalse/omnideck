@@ -15,7 +15,7 @@ import {
 
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_CACHE_ENTRIES = 120;
-const USER_AGENT = 'OmniDeck/1.4.5 (https://github.com/DanHalse/omnideck)';
+const USER_AGENT = 'OmniDeck/1.5.0 (https://github.com/DanHalse/omnideck)';
 
 interface CacheFileShape {
   dossiers: Record<string, ArtistDossier>;
@@ -723,6 +723,24 @@ export class MusicIntelService {
     if (deezer.related.length > 0) sources.push('Deezer');
     if (lyrics.source === 'lrclib') sources.push('LRCLIB');
 
+    const hasEstablishedProfile = Boolean(
+      wiki ||
+        mb.genres.length > 0 ||
+        mb.origin ||
+        mb.members.length > 0 ||
+        mb.essentialAlbums.length > 0 ||
+        deezer.related.length >= 2,
+    );
+    const verificationStatus: 'verified' | 'unverified' | undefined = artistName
+      ? hasEstablishedProfile
+        ? 'verified'
+        : 'unverified'
+      : undefined;
+    const verificationHint =
+      verificationStatus === 'unverified'
+        ? 'No Wikipedia, MusicBrainz, or established Deezer artist profile found — may be an independent or AI-generated upload.'
+        : undefined;
+
     let dossier: ArtistDossier = {
       queryKey,
       fetchedAt: Date.now(),
@@ -745,6 +763,8 @@ export class MusicIntelService {
       lyrics,
       aiEnriched: false,
       sources,
+      verificationStatus,
+      verificationHint,
     };
 
     // Optional AI Enrichment (grounds trackContext + "why these bands match" reasons in verified metadata)

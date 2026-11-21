@@ -1,6 +1,8 @@
 import {
   APP_VERSION,
   GITHUB_RELEASES_URL,
+  addBlockedMusicEntry,
+  addBookNote,
   addCustomService,
   applyWorkspace,
   buildServiceSearchUrl,
@@ -9,10 +11,13 @@ import {
   createDefaultConfig,
   createInitialRuntimeState,
   deleteCustomWorkspace,
+  mergeIntegrationsConfig,
   mergePersistedConfig,
   moveServiceById,
   parseImportedConfig,
   pinFavorite,
+  removeBlockedMusicEntry,
+  removeBookNote,
   removeCustomService,
   removeFavorite,
   reorderServices,
@@ -475,6 +480,32 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
           powerUps: { ...config.settings.powerUps, ...patch },
         },
       };
+      return commit();
+    },
+    updateIntegrations: async (patch) => {
+      config = {
+        ...config,
+        settings: {
+          ...config.settings,
+          integrations: mergeIntegrationsConfig({ ...config.settings.integrations, ...patch }),
+        },
+      };
+      return commit();
+    },
+    blockMusic: async (input) => {
+      config = addBlockedMusicEntry(config, input);
+      return commit();
+    },
+    unblockMusic: async (entryId) => {
+      config = removeBlockedMusicEntry(config, entryId);
+      return commit();
+    },
+    addBookNote: async (input) => {
+      config = addBookNote(config, input);
+      return commit();
+    },
+    removeBookNote: async (noteId) => {
+      config = removeBookNote(config, noteId);
       return commit();
     },
     addCustomService: async (input) => {

@@ -6,64 +6,110 @@ export const DEFAULT_POWER_UPS: PowerUpsConfig = {
   youtubeHideShorts: true,
   youtubeAutoDismissStillListening: true,
   youtubeRememberSpeedQuality: true,
+  youtubeForceOriginalAudio: true,
+  youtubeReturnDislikes: true,
+  youtubeDeArrow: false,
+  youtubeHideEndScreens: true,
+  youtubeDisableHoverPreview: false,
+  youtubePlayerControls: true,
+  ytmAudioOnlyMode: false,
+  ytmPlaylistQuickFilter: true,
 
   // Twitch
   twitchThirdPartyEmotes: true,
   twitchAutoClaimPoints: true,
   twitchAutoTheater: false,
   twitchPauseChatOnHover: true,
+  twitchAutoRecover: true,
+  twitchHideClutter: true,
 
   // Audible
   audibleDirectToLibrary: true,
   audibleDockCloudPlayer: true,
   audibleFadeSleepAndRewind: true,
   audibleWhisperSyncFlush: true,
+  audiblePrecisionSpeed: true,
+  audibleHideStoreClutter: true,
 
-  // Reddit (RES-Lite)
+  // Reddit (Modern RES)
   redditCompactDensity: true,
   redditUseOldReddit: false,
   redditKeyboardNav: true,
   redditCollapseAutoMod: true,
   redditHidePromoted: true,
+  redditHideRecommended: true,
+  redditNextCommentButton: true,
+  redditHoverZoom: true,
+  redditUserTagger: true,
+  redditFilteredKeywords: [],
 
   // Spotify
   spotifyKeepConnectAlive: true,
   spotifyLikeShortcut: 'CommandOrControl+Alt+L',
+  spotifyHidePodcastsAudiobooks: true,
 };
 
 /**
- * Safely merges partial/legacy Power-Ups configuration with curated v1.3 defaults.
+ * Safely merges partial/legacy Power-Ups configuration with curated v1.5 defaults.
  */
 export function mergePowerUpsConfig(raw?: Partial<PowerUpsConfig>): PowerUpsConfig {
   if (!raw || typeof raw !== 'object') {
-    return { ...DEFAULT_POWER_UPS };
+    return { ...DEFAULT_POWER_UPS, redditFilteredKeywords: [...DEFAULT_POWER_UPS.redditFilteredKeywords] };
   }
   const pickBool = <K extends keyof PowerUpsConfig>(key: K): boolean =>
     typeof raw[key] === 'boolean' ? (raw[key] as boolean) : (DEFAULT_POWER_UPS[key] as boolean);
+
+  const rawKeywords = Array.isArray(raw.redditFilteredKeywords) ? raw.redditFilteredKeywords : [];
+  const redditFilteredKeywords = Array.from(
+    new Set(
+      rawKeywords
+        .filter((k): k is string => typeof k === 'string')
+        .map((k) => k.trim())
+        .filter((k) => k.length > 0 && k.length <= 64),
+    ),
+  ).slice(0, 100);
 
   return {
     youtubeSponsorBlock: pickBool('youtubeSponsorBlock'),
     youtubeHideShorts: pickBool('youtubeHideShorts'),
     youtubeAutoDismissStillListening: pickBool('youtubeAutoDismissStillListening'),
     youtubeRememberSpeedQuality: pickBool('youtubeRememberSpeedQuality'),
+    youtubeForceOriginalAudio: pickBool('youtubeForceOriginalAudio'),
+    youtubeReturnDislikes: pickBool('youtubeReturnDislikes'),
+    youtubeDeArrow: pickBool('youtubeDeArrow'),
+    youtubeHideEndScreens: pickBool('youtubeHideEndScreens'),
+    youtubeDisableHoverPreview: pickBool('youtubeDisableHoverPreview'),
+    youtubePlayerControls: pickBool('youtubePlayerControls'),
+    ytmAudioOnlyMode: pickBool('ytmAudioOnlyMode'),
+    ytmPlaylistQuickFilter: pickBool('ytmPlaylistQuickFilter'),
     twitchThirdPartyEmotes: pickBool('twitchThirdPartyEmotes'),
     twitchAutoClaimPoints: pickBool('twitchAutoClaimPoints'),
     twitchAutoTheater: pickBool('twitchAutoTheater'),
     twitchPauseChatOnHover: pickBool('twitchPauseChatOnHover'),
+    twitchAutoRecover: pickBool('twitchAutoRecover'),
+    twitchHideClutter: pickBool('twitchHideClutter'),
     audibleDirectToLibrary: pickBool('audibleDirectToLibrary'),
     audibleDockCloudPlayer: pickBool('audibleDockCloudPlayer'),
     audibleFadeSleepAndRewind: pickBool('audibleFadeSleepAndRewind'),
     audibleWhisperSyncFlush: pickBool('audibleWhisperSyncFlush'),
+    audiblePrecisionSpeed: pickBool('audiblePrecisionSpeed'),
+    audibleHideStoreClutter: pickBool('audibleHideStoreClutter'),
     redditCompactDensity: pickBool('redditCompactDensity'),
     redditUseOldReddit: pickBool('redditUseOldReddit'),
     redditKeyboardNav: pickBool('redditKeyboardNav'),
     redditCollapseAutoMod: pickBool('redditCollapseAutoMod'),
     redditHidePromoted: pickBool('redditHidePromoted'),
+    redditHideRecommended: pickBool('redditHideRecommended'),
+    redditNextCommentButton: pickBool('redditNextCommentButton'),
+    redditHoverZoom: pickBool('redditHoverZoom'),
+    redditUserTagger: pickBool('redditUserTagger'),
+    redditFilteredKeywords,
     spotifyKeepConnectAlive: pickBool('spotifyKeepConnectAlive'),
     spotifyLikeShortcut:
       typeof raw.spotifyLikeShortcut === 'string' && raw.spotifyLikeShortcut.trim()
         ? raw.spotifyLikeShortcut.trim()
         : DEFAULT_POWER_UPS.spotifyLikeShortcut,
+    spotifyHidePodcastsAudiobooks: pickBool('spotifyHidePodcastsAudiobooks'),
   };
 }
 
@@ -462,6 +508,38 @@ export function buildMobilePowerUpsScript(serviceId: string, powerUps: PowerUpsC
           };
           collapse();
           window.__odAutoModTimer = setInterval(collapse, 3000);
+        })();
+      `);
+    }
+    if (powerUps.redditNextCommentButton) {
+      parts.push(`
+        (function(){
+          if (document.getElementById('__od_next_comment_btn')) return;
+          const syncBtn = function() {
+            const isComments = location.pathname.includes('/comments/');
+            let btn = document.getElementById('__od_next_comment_btn');
+            if (!isComments) {
+              if (btn) btn.style.display = 'none';
+              return;
+            }
+            if (!btn && document.body) {
+              btn = document.createElement('button');
+              btn.id = '__od_next_comment_btn';
+              btn.type = 'button';
+              btn.setAttribute('aria-label', 'Jump to next top-level comment');
+              btn.textContent = '↓';
+              btn.style.cssText = 'position:fixed;right:14px;bottom:84px;z-index:9990;width:40px;height:40px;border-radius:999px;border:1px solid rgba(255,255,255,0.2);background:rgba(24,24,27,0.88);color:#fff;font-size:18px;font-weight:700;box-shadow:0 6px 18px rgba(0,0,0,0.45);cursor:pointer;';
+              btn.addEventListener('click', function() {
+                const roots = Array.from(document.querySelectorAll('shreddit-comment[depth="0"], .sitetable.nestedlisting > .thing.comment'));
+                const next = roots.find(function(el) { return el.getBoundingClientRect().top > 80; });
+                if (next) next.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              });
+              document.body.appendChild(btn);
+            }
+            if (btn) btn.style.display = 'flex';
+          };
+          syncBtn();
+          if (!window.__odNextCmtTimer) window.__odNextCmtTimer = setInterval(syncBtn, 1500);
         })();
       `);
     }

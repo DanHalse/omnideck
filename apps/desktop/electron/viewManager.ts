@@ -18,6 +18,7 @@ import {
   findActiveLyricIndex,
   isInAppPopupUrl,
   matchServiceForUrl,
+  matchesBlockedMusic,
   recordRecentActivity,
   resolveElectronPartition,
   rewriteUrlForPowerUps,
@@ -47,15 +48,21 @@ import {
   READ_MEDIA_METADATA_SCRIPT,
 } from './nativePolish.js';
 import {
+  buildAudiblePowerUpScript,
+  buildDeArrowInjector,
   buildRedditPowerUpScript,
   buildRestoreHibernateStateScript,
   buildSponsorSegmentsInjector,
+  buildSpotifyPowerUpScript,
   buildTwitchEmotesInjector,
   buildTwitchPowerUpScript,
+  buildYouTubeDislikesInjector,
   buildYouTubePowerUpScript,
   CAPTURE_HIBERNATE_STATE_SCRIPT,
+  fetchDeArrowTitle,
   fetchSponsorSegments,
   fetchTwitchEmotes,
+  fetchYouTubeDislikes,
 } from './powerUps.js';
 
 const ALLOWED_PERMISSIONS = new Set<string>([
@@ -106,6 +113,8 @@ export class ViewManager {
   private readonly pendingRewindServiceIds = new Set<string>();
   private readonly duckedServiceIds = new Set<string>();
   private readonly lastSponsorVideoByService = new Map<string, string>();
+  private lastYtEnrichVideoId = '';
+  private lastTrashbinSkipAt = 0;
   private readonly lastTwitchChannel = { login: '' };
   private readonly configuredPartitions = new Set<string>();
   private readonly attachedViewIds = new Set<string>();
@@ -1406,6 +1415,10 @@ export class ViewManager {
       void wc.executeJavaScript(buildTwitchPowerUpScript(powerUps), true).catch(() => {});
     } else if (service.id === 'reddit') {
       void wc.executeJavaScript(buildRedditPowerUpScript(powerUps), true).catch(() => {});
+    } else if (service.id === 'spotify') {
+      void wc.executeJavaScript(buildSpotifyPowerUpScript(powerUps), true).catch(() => {});
+    } else if (service.id === 'audible') {
+      void wc.executeJavaScript(buildAudiblePowerUpScript(powerUps), true).catch(() => {});
     }
 
     this.syncDynamicPowerUpData(service.id, wc.getURL());
@@ -1430,6 +1443,49 @@ export class ViewManager {
             .executeJavaScript(buildSponsorSegmentsInjector(videoId, segments), true)
             .catch(() => {});
         });
+      }
+    }
+
+    // YouTube Return Dislike + DeArrow anti-clickbait titles
+    if (serviceId === 'youtube' && (powerUps.youtubeReturnDislikes || powerUps.youtubeDeArrow)) {
+      const videoId = extractYouTubeVideoId(url);
+      if (videoId && this.lastYtEnrichVideoId !== videoId) {
+        this.lastYtEnrichVideoId = videoId;
+        if (powerUps.youtubeReturnDislikes) {
+          void fetchYouTubeDislikes(videoId).then((stats) => {
+            if (!stats || this.lastYtEnrichVideoId !== videoId) return;
+            const curView = this.views.get('youtube');
+            if (!curView || curView.webContents.isDestroyed()) return;
+            const inject = () => {
+              if (!curView.webContents.isDestroyed() && this.lastYtEnrichVideoId === videoId) {
+                void curView.webContents
+                  .executeJavaScript(
+                    buildYouTubeDislikesInjector(videoId, stats.likes, stats.dislikes),
+                    true,
+                  )
+                  .catch(() => {});
+              }
+            };
+            inject();
+            setTimeout(inject, 1400);
+          });
+        }
+        if (powerUps.youtubeDeArrow) {
+          void fetchDeArrowTitle(videoId).then((cleanTitle) => {
+            if (!cleanTitle || this.lastYtEnrichVideoId !== videoId) return;
+            const curView = this.views.get('youtube');
+            if (!curView || curView.webContents.isDestroyed()) return;
+            const inject = () => {
+              if (!curView.webContents.isDestroyed() && this.lastYtEnrichVideoId === videoId) {
+                void curView.webContents
+                  .executeJavaScript(buildDeArrowInjector(videoId, cleanTitle), true)
+                  .catch(() => {});
+              }
+            };
+            inject();
+            setTimeout(inject, 1400);
+          });
+        }
       }
     }
 
@@ -1488,6 +1544,9 @@ export class ViewManager {
           .insertCSS(buildNativePolishCss('audible', this.config.settings.theme, this.config.settings.powerUps))
           .catch(() => {});
       }
+      void wc
+        .executeJavaScript(buildAudiblePowerUpScript(this.config.settings.powerUps), true)
+        .catch(() => {});
       const curRt = this.runtime.get('audible');
       if (curRt && curRt.volume < 0.99) {
         this.applyVolumeToView('audible', curRt.volume);
@@ -1932,6 +1991,26 @@ export class ViewManager {
       if (metaChanged || durationChanged || timeChanged || audibleChanged) {
         this.mediaMeta.set(serviceId, merged);
         this.emitSnapshot();
+      }
+
+      // Universal Artist & Track Blocker ("Trashbin") auto-skip on YouTube Music & Spotify
+      if (
+        (serviceId === 'youtube-music' || serviceId === 'spotify') &&
+        livePlaying &&
+        merged.title &&
+        this.config.settings.blockedMusic.length > 0 &&
+        now - this.lastTrashbinSkipAt > 2500
+      ) {
+        const hit = matchesBlockedMusic(
+          merged.title,
+          merged.artist,
+          this.config.settings.blockedMusic,
+        );
+        if (hit) {
+          this.lastTrashbinSkipAt = now;
+          this.showToast(`Auto-skipped blocked ${hit.kind}: ${hit.value}`, 2600);
+          void this.runMediaAction('next', serviceId);
+        }
       }
     } catch {
       // Ignore cross-frame/navigation errors

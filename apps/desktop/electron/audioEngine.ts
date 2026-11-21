@@ -18,11 +18,15 @@ export function buildEqualizerScript(eq: EqualizerConfig): string {
       const val = Number(eq.bands[i] ?? 0);
       return Number.isFinite(val) ? Math.min(12, Math.max(-12, val)) : 0;
     }),
+    compressorEnabled: Boolean(eq.compressorEnabled),
+    volumeBoost: Number.isFinite(eq.volumeBoost) ? Math.min(2.0, Math.max(1.0, eq.volumeBoost)) : 1.0,
   };
 
   return `(function () {
     const cfg = ${JSON.stringify(safeEq)};
     const FREQS = ${JSON.stringify([...EQ_FREQUENCIES])};
+    const isGraphNeeded = () =>
+      Boolean(cfg.enabled || cfg.compressorEnabled || (cfg.volumeBoost && cfg.volumeBoost > 1.005));
     window.__omnideckEqConfig = cfg;
 
     const dbToGain = (db) => Math.pow(10, db / 20);
@@ -31,12 +35,31 @@ export function buildEqualizerScript(eq: EqualizerConfig): string {
       try {
         if (!state || !state.ctx) return;
         const now = state.ctx.currentTime;
-        const preampGain = cfg.enabled ? dbToGain(cfg.preampDb) : 1.0;
-        state.preamp.gain.setTargetAtTime(preampGain, now, 0.025);
+        const eqPreamp = cfg.enabled ? dbToGain(cfg.preampDb) : 1.0;
+        const compMakeup = cfg.compressorEnabled ? 1.45 : 1.0;
+        const boost = cfg.volumeBoost || 1.0;
+        state.preamp.gain.setTargetAtTime(eqPreamp, now, 0.025);
+        state.outputGain.gain.setTargetAtTime(Math.min(3.0, compMakeup * boost), now, 0.025);
+
         for (let i = 0; i < state.filters.length; i++) {
           const targetDb = cfg.enabled ? (cfg.bands[i] || 0) : 0;
           state.filters[i].gain.setTargetAtTime(targetDb, now, 0.025);
         }
+
+        if (cfg.compressorEnabled) {
+          state.limiter.threshold.setTargetAtTime(-24, now, 0.025);
+          state.limiter.knee.setTargetAtTime(24, now, 0.025);
+          state.limiter.ratio.setTargetAtTime(10, now, 0.025);
+          state.limiter.attack.setTargetAtTime(0.003, now, 0.025);
+          state.limiter.release.setTargetAtTime(0.22, now, 0.025);
+        } else {
+          state.limiter.threshold.setTargetAtTime(-1.5, now, 0.025);
+          state.limiter.knee.setTargetAtTime(6, now, 0.025);
+          state.limiter.ratio.setTargetAtTime(8, now, 0.025);
+          state.limiter.attack.setTargetAtTime(0.003, now, 0.025);
+          state.limiter.release.setTargetAtTime(0.15, now, 0.025);
+        }
+
         if (state.ctx.state === 'suspended') {
           state.ctx.resume().catch(() => {});
         }
@@ -57,8 +80,8 @@ export function buildEqualizerScript(eq: EqualizerConfig): string {
           updateState(existing);
           return;
         }
-        // Only construct an AudioContext graph once EQ is actually enabled
-        if (!cfg.enabled) return;
+        // Only construct an AudioContext graph once EQ, Compressor, or Boost is active
+        if (!isGraphNeeded()) return;
 
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
         if (!AudioCtx) return;
@@ -78,11 +101,13 @@ export function buildEqualizerScript(eq: EqualizerConfig): string {
         });
 
         const limiter = ctx.createDynamicsCompressor();
-        limiter.threshold.value = -1.5;
-        limiter.knee.value = 6;
-        limiter.ratio.value = 8;
-        limiter.attack.value = 0.003;
-        limiter.release.value = 0.15;
+        const outputGain = ctx.createGain();
+        const safetyClipper = ctx.createDynamicsCompressor();
+        safetyClipper.threshold.value = -0.8;
+        safetyClipper.knee.value = 3;
+        safetyClipper.ratio.value = 16;
+        safetyClipper.attack.value = 0.002;
+        safetyClipper.release.value = 0.1;
 
         source.connect(preamp);
         let prev = preamp;
@@ -91,9 +116,11 @@ export function buildEqualizerScript(eq: EqualizerConfig): string {
           prev = f;
         }
         prev.connect(limiter);
-        limiter.connect(ctx.destination);
+        limiter.connect(outputGain);
+        outputGain.connect(safetyClipper);
+        safetyClipper.connect(ctx.destination);
 
-        const state = { ctx, source, preamp, filters, limiter };
+        const state = { ctx, source, preamp, filters, limiter, outputGain, safetyClipper };
         window.__omnideckEqNodes.set(el, state);
         window.__omnideckEqActiveStates.add(state);
         updateState(state);
@@ -108,7 +135,7 @@ export function buildEqualizerScript(eq: EqualizerConfig): string {
       }
     }
 
-    if (cfg.enabled) {
+    if (isGraphNeeded()) {
       document.querySelectorAll('audio, video').forEach(hookMediaElement);
     }
 
@@ -116,14 +143,15 @@ export function buildEqualizerScript(eq: EqualizerConfig): string {
       window.__omnideckEqPlayBound = true;
       document.addEventListener('play', (ev) => {
         if (ev && ev.target && (ev.target.tagName === 'AUDIO' || ev.target.tagName === 'VIDEO')) {
-          if (window.__omnideckEqConfig && window.__omnideckEqConfig.enabled) {
+          const c = window.__omnideckEqConfig;
+          if (c && (c.enabled || c.compressorEnabled || (c.volumeBoost && c.volumeBoost > 1.005))) {
             hookMediaElement(ev.target);
           }
         }
       }, true);
     }
 
-    return cfg.enabled;
+    return isGraphNeeded();
   })();`;
 }
 

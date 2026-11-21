@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import type {
+  BookNoteEntry,
   ListeningStatsSummary,
   PinnedFavorite,
   RecentActivityItem,
@@ -32,6 +33,7 @@ interface HomeHubProps {
   recentActivity: RecentActivityItem[];
   sleepTimer: SleepTimerState;
   listeningStats: ListeningStatsSummary | null;
+  bookNotes: BookNoteEntry[];
   onSelectService: (serviceId: string) => void;
   onOpenInSplit: (serviceId: string) => void;
   onOpenUrlInService: (serviceId: string, url: string) => void;
@@ -39,6 +41,8 @@ interface HomeHubProps {
   onRemoveFavorite: (favoriteId: string) => void;
   onClearRecent: () => void;
   onClearListeningStats: () => void;
+  onAddBookNote: (input: { bookTitle: string; timestampLabel: string; note: string; url?: string }) => void;
+  onRemoveBookNote: (noteId: string) => void;
   onApplyWorkspace: (workspaceId: string) => void;
   onSetSleepTimer: (minutes: number) => void;
   onOpenMixer: () => void;
@@ -62,6 +66,7 @@ export function HomeHub({
   recentActivity,
   sleepTimer,
   listeningStats,
+  bookNotes,
   onSelectService,
   onOpenInSplit,
   onOpenUrlInService,
@@ -69,6 +74,8 @@ export function HomeHub({
   onRemoveFavorite,
   onClearRecent,
   onClearListeningStats,
+  onAddBookNote,
+  onRemoveBookNote,
   onApplyWorkspace,
   onSetSleepTimer,
   onOpenMixer,
@@ -77,6 +84,10 @@ export function HomeHub({
   const [query, setQuery] = useState('');
   const [searchTargetId, setSearchTargetId] = useState<string>(services[0]?.id ?? 'youtube');
   const [statsExpanded, setStatsExpanded] = useState(false);
+  const [noteBookTitle, setNoteBookTitle] = useState('');
+  const [noteTimestamp, setNoteTimestamp] = useState('');
+  const [noteBody, setNoteBody] = useState('');
+  const [notesCopied, setNotesCopied] = useState(false);
 
   const getService = (id: string) => allServices.find((s) => s.id === id);
 
@@ -538,6 +549,116 @@ export function HomeHub({
                   </div>
                 </div>
               )}
+            </div>
+          )}
+        </section>
+
+        {/* Audible Timestamped Book Notes & Quotes */}
+        <section className="home-section">
+          <div className="home-section__header">
+            <h2 className="section-label" style={{ margin: 0 }}>
+              Audible Book Notes &amp; Timestamped Quotes ({bookNotes.length})
+            </h2>
+            {bookNotes.length > 0 && (
+              <button
+                type="button"
+                className="pill-btn"
+                onClick={() => {
+                  const md = bookNotes
+                    .map((n) => `- **${n.bookTitle}** (${n.timestampLabel}): ${n.note}`)
+                    .join('\n');
+                  void navigator.clipboard?.writeText(md).then(() => {
+                    setNotesCopied(true);
+                    setTimeout(() => setNotesCopied(false), 2000);
+                  });
+                }}
+              >
+                {notesCopied ? 'Copied Markdown!' : 'Copy Markdown'}
+              </button>
+            )}
+          </div>
+
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const audibleRt = runtime.audible;
+              const book =
+                noteBookTitle.trim() ||
+                (audibleRt?.pageTitle && audibleRt.pageTitle !== 'Audible'
+                  ? audibleRt.pageTitle.replace(/\s*[-|]\s*Audible.*$/i, '').trim()
+                  : 'Audiobook');
+              if (!noteBody.trim()) return;
+              onAddBookNote({
+                bookTitle: book,
+                timestampLabel: noteTimestamp.trim() || 'Bookmark',
+                note: noteBody.trim(),
+                url: audibleRt?.currentUrl,
+              });
+              setNoteBody('');
+              setNoteTimestamp('');
+            }}
+            style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}
+          >
+            <input
+              type="text"
+              className="text-input"
+              style={{ flex: '1 1 160px' }}
+              placeholder={
+                runtime.audible?.pageTitle && runtime.audible.pageTitle !== 'Audible'
+                  ? `Book (default: ${runtime.audible.pageTitle.slice(0, 28)})`
+                  : 'Book title'
+              }
+              value={noteBookTitle}
+              onChange={(e) => setNoteBookTitle(e.target.value)}
+            />
+            <input
+              type="text"
+              className="text-input"
+              style={{ width: 96 }}
+              placeholder="Ch / 1:24:10"
+              value={noteTimestamp}
+              onChange={(e) => setNoteTimestamp(e.target.value)}
+            />
+            <input
+              type="text"
+              className="text-input"
+              style={{ flex: '2 1 220px' }}
+              placeholder="Save a quote, idea, or chapter takeaway…"
+              value={noteBody}
+              onChange={(e) => setNoteBody(e.target.value)}
+            />
+            <button
+              type="submit"
+              className="pill-btn pill-btn--primary"
+              disabled={!noteBody.trim()}
+            >
+              Save Note
+            </button>
+          </form>
+
+          {bookNotes.length > 0 && (
+            <div className="home-list">
+              {bookNotes.slice(0, 8).map((n) => (
+                <div key={n.id} className="home-list-item">
+                  <div className="home-list-item__main" style={{ cursor: n.url ? 'pointer' : 'default' }} onClick={() => n.url && onOpenUrlInService('audible', n.url)}>
+                    <ServiceIcon icon="audible" size={16} color="#F7991C" />
+                    <div className="home-list-item__text">
+                      <div className="home-list-item__title">{n.note}</div>
+                      <div className="home-list-item__meta">
+                        {n.bookTitle} · {n.timestampLabel}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="icon-btn icon-btn--sm"
+                    title="Delete note"
+                    onClick={() => onRemoveBookNote(n.id)}
+                  >
+                    <CloseIcon size={12} />
+                  </button>
+                </div>
+              ))}
             </div>
           )}
         </section>

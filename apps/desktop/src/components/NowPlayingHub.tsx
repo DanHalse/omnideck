@@ -49,6 +49,7 @@ interface NowPlayingHubProps {
   }) => Promise<ArtistDossier>;
   onLoadBandDetails: (bandName: string) => Promise<SuggestedBand>;
   onAskAi: (dossier: ArtistDossier, question: string) => Promise<{ answer: string; error?: string }>;
+  onBlockMusic: (input: { kind: 'artist' | 'track'; value: string; artist?: string }) => void;
 }
 
 const QUICK_AI_PROMPTS = [
@@ -83,6 +84,7 @@ export function NowPlayingHub({
   onLoadDossier,
   onLoadBandDetails,
   onAskAi,
+  onBlockMusic,
 }: NowPlayingHubProps) {
   const [tab, setTab] = useState<HubTab>('overview');
   const [dossier, setDossier] = useState<ArtistDossier | null>(null);
@@ -323,12 +325,27 @@ export function NowPlayingHub({
       )}
 
       <div className="np-card">
-        <div className="np-card__eyebrow">About {dossier?.artistName || nowPlaying.artist || 'Artist'}</div>
+        <div className="np-card__eyebrow" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+          <span>About {dossier?.artistName || nowPlaying.artist || 'Artist'}</span>
+          {dossier?.verificationStatus === 'verified' && (
+            <span className="np-verify-pill np-verify-pill--ok" title="Verified via Wikipedia, MusicBrainz, or Deezer artist catalog">
+              Verified Artist
+            </span>
+          )}
+          {dossier?.verificationStatus === 'unverified' && (
+            <span className="np-verify-pill np-verify-pill--warn" title={dossier.verificationHint}>
+              Unverified / Possible AI
+            </span>
+          )}
+        </div>
         {(dossier?.origin || dossier?.activeYears) && (
           <div className="np-facts-row">
             {dossier.origin && <span className="np-fact-pill">{dossier.origin}</span>}
             {dossier.activeYears && <span className="np-fact-pill">{dossier.activeYears}</span>}
           </div>
+        )}
+        {dossier?.verificationStatus === 'unverified' && dossier.verificationHint && (
+          <div className="np-verify-note">{dossier.verificationHint}</div>
         )}
         <p className="np-card__body">
           {loading && !dossier ? 'Loading artist dossier…' : dossier?.bio || 'Start playing a track on YouTube Music or Spotify.'}
@@ -382,6 +399,16 @@ export function NowPlayingHub({
           <button
             type="button"
             className="pill-btn"
+            onClick={() => {
+              const otherSvc = musicServiceId === 'spotify' ? 'youtube-music' : 'spotify';
+              onSearchInService(otherSvc, `${dossier.artistName} ${dossier.trackTitle}`);
+            }}
+          >
+            Open in {musicServiceId === 'spotify' ? 'YouTube Music' : 'Spotify'}
+          </button>
+          <button
+            type="button"
+            className="pill-btn"
             onClick={() => onSearchInService('youtube', `${dossier.artistName} live performance`)}
           >
             Watch Live on YouTube
@@ -393,6 +420,30 @@ export function NowPlayingHub({
           >
             Discuss on Reddit
           </button>
+          <button
+            type="button"
+            className="pill-btn pill-btn--danger"
+            title="Add this artist to OmniDeck Trashbin — auto-skips whenever they play"
+            onClick={() => onBlockMusic({ kind: 'artist', value: dossier.artistName })}
+          >
+            Block Artist
+          </button>
+          {dossier.trackTitle && (
+            <button
+              type="button"
+              className="pill-btn"
+              title="Add this specific track to OmniDeck Trashbin — auto-skips whenever it plays"
+              onClick={() =>
+                onBlockMusic({
+                  kind: 'track',
+                  value: dossier.trackTitle,
+                  artist: dossier.artistName,
+                })
+              }
+            >
+              Block Song
+            </button>
+          )}
         </div>
       )}
 

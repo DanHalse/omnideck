@@ -6,6 +6,7 @@ import {
   type AppSettings,
   type AudioFocusMode,
   type DrmStatus,
+  type IntegrationsConfig,
   type PowerUpsConfig,
   type ServiceDefinition,
   type ServiceRuntimeState,
@@ -31,6 +32,8 @@ interface SettingsModalProps {
   onClose: () => void;
   onUpdateSettings: (patch: Partial<AppSettings>) => Promise<void>;
   onUpdatePowerUps: (patch: Partial<PowerUpsConfig>) => Promise<void>;
+  onUpdateIntegrations: (patch: Partial<IntegrationsConfig>) => Promise<void>;
+  onUnblockMusic: (entryId: string) => Promise<void>;
   onTestAiConnection: (config: AiCompanionConfig) => Promise<{ ok: boolean; message: string }>;
   onRefreshMemory: () => Promise<void>;
   onHibernateService: (serviceId: string) => Promise<void>;
@@ -71,6 +74,8 @@ export function SettingsModal({
   onClose,
   onUpdateSettings,
   onUpdatePowerUps,
+  onUpdateIntegrations,
+  onUnblockMusic,
   onTestAiConnection,
   onRefreshMemory,
   onHibernateService,
@@ -98,12 +103,18 @@ export function SettingsModal({
   const [aiDraft, setAiDraft] = useState<AiCompanionConfig>(settings.aiCompanion);
   const [aiTestResult, setAiTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [aiTesting, setAiTesting] = useState(false);
+  const [intDraft, setIntDraft] = useState<IntegrationsConfig>(settings.integrations);
+  const [redditKwInput, setRedditKwInput] = useState('');
 
   const pu = settings.powerUps;
 
   useEffect(() => {
     setAiDraft(settings.aiCompanion);
   }, [settings.aiCompanion]);
+
+  useEffect(() => {
+    setIntDraft(settings.integrations);
+  }, [settings.integrations]);
 
   // Refresh live per-service RAM metrics whenever Performance tab is open
   useEffect(() => {
@@ -242,7 +253,7 @@ export function SettingsModal({
               style={{ flex: 1 }}
               onClick={() => setTab('ai')}
             >
-              AI Companion
+              AI &amp; Integrations
             </button>
             <button
               type="button"
@@ -728,6 +739,71 @@ export function SettingsModal({
                   </>
                 )}
               </section>
+
+              <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <h3 className="section-label">Discord Rich Presence &amp; Music Scrobbling</h3>
+                {renderToggleRow(
+                  'Discord Rich Presence',
+                  'Shows your live YouTube Music, Spotify, YouTube, or Twitch activity with timestamps & album art in Discord.',
+                  intDraft.discordRpcEnabled,
+                  () => {
+                    const next = { ...intDraft, discordRpcEnabled: !intDraft.discordRpcEnabled };
+                    setIntDraft(next);
+                    void onUpdateIntegrations({ discordRpcEnabled: next.discordRpcEnabled });
+                  },
+                )}
+
+                <div className="setting-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
+                  <label className="setting-row__title" htmlFor="lb-token">
+                    ListenBrainz User Token (Optional Scrobbler)
+                  </label>
+                  <div className="setting-row__desc">
+                    Automatically submits &quot;Playing Now&quot; and full listens from YouTube Music &amp; Spotify to ListenBrainz.
+                  </div>
+                  <input
+                    id="lb-token"
+                    type="password"
+                    className="text-input"
+                    placeholder="Paste your ListenBrainz user token"
+                    value={intDraft.listenBrainzToken}
+                    onChange={(e) => setIntDraft({ ...intDraft, listenBrainzToken: e.target.value })}
+                    onBlur={() => void onUpdateIntegrations({ listenBrainzToken: intDraft.listenBrainzToken })}
+                  />
+                </div>
+
+                <div className="setting-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
+                  <div className="setting-row__title">Last.fm Scrobbling (Optional)</div>
+                  <div className="setting-row__desc">
+                    Enter your Last.fm API Key, Shared Secret, and Session Key to scrobble tracks automatically.
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
+                    <input
+                      type="password"
+                      className="text-input"
+                      placeholder="API Key"
+                      value={intDraft.lastFmApiKey}
+                      onChange={(e) => setIntDraft({ ...intDraft, lastFmApiKey: e.target.value })}
+                      onBlur={() => void onUpdateIntegrations({ lastFmApiKey: intDraft.lastFmApiKey })}
+                    />
+                    <input
+                      type="password"
+                      className="text-input"
+                      placeholder="Shared Secret"
+                      value={intDraft.lastFmApiSecret}
+                      onChange={(e) => setIntDraft({ ...intDraft, lastFmApiSecret: e.target.value })}
+                      onBlur={() => void onUpdateIntegrations({ lastFmApiSecret: intDraft.lastFmApiSecret })}
+                    />
+                    <input
+                      type="password"
+                      className="text-input"
+                      placeholder="Session Key"
+                      value={intDraft.lastFmSessionKey}
+                      onChange={(e) => setIntDraft({ ...intDraft, lastFmSessionKey: e.target.value })}
+                      onBlur={() => void onUpdateIntegrations({ lastFmSessionKey: intDraft.lastFmSessionKey })}
+                    />
+                  </div>
+                </div>
+              </section>
             </>
           )}
 
@@ -743,10 +819,46 @@ export function SettingsModal({
                   () => void onUpdatePowerUps({ youtubeSponsorBlock: !pu.youtubeSponsorBlock }),
                 )}
                 {renderToggleRow(
+                  'Force Original Audio Track (Kill AI Auto-Dubbing)',
+                  'Automatically switches back to the creator\'s original voice whenever YouTube forces robotic AI auto-dubbing.',
+                  pu.youtubeForceOriginalAudio,
+                  () => void onUpdatePowerUps({ youtubeForceOriginalAudio: !pu.youtubeForceOriginalAudio }),
+                )}
+                {renderToggleRow(
+                  'Return YouTube Dislike Counter (Ad-Free)',
+                  'Restores estimated dislike counts and a subtle like/dislike ratio bar underneath YouTube videos.',
+                  pu.youtubeReturnDislikes,
+                  () => void onUpdatePowerUps({ youtubeReturnDislikes: !pu.youtubeReturnDislikes }),
+                )}
+                {renderToggleRow(
+                  'DeArrow Anti-Clickbait Titles',
+                  'Replaces ALL-CAPS clickbait watch titles with crowdsourced factual titles (hover title to see original).',
+                  pu.youtubeDeArrow,
+                  () => void onUpdatePowerUps({ youtubeDeArrow: !pu.youtubeDeArrow }),
+                )}
+                {renderToggleRow(
                   'Hide YouTube Shorts & Convert /shorts/',
                   'Removes Shorts shelves from Home/Search and opens /shorts/ links in the full desktop video player.',
                   pu.youtubeHideShorts,
                   () => void onUpdatePowerUps({ youtubeHideShorts: !pu.youtubeHideShorts }),
+                )}
+                {renderToggleRow(
+                  'Hide End-Screen Cards & Playables Spam',
+                  'Clears floating end-screen cards blocking the last 15 seconds of videos and removes Playables shelves.',
+                  pu.youtubeHideEndScreens,
+                  () => void onUpdatePowerUps({ youtubeHideEndScreens: !pu.youtubeHideEndScreens }),
+                )}
+                {renderToggleRow(
+                  'Disable Homepage Hover Auto-Play Previews',
+                  'Stops video thumbnails from auto-playing when your mouse hovers over them.',
+                  pu.youtubeDisableHoverPreview,
+                  () => void onUpdatePowerUps({ youtubeDisableHoverPreview: !pu.youtubeDisableHoverPreview }),
+                )}
+                {renderToggleRow(
+                  'Player Power Controls (A–B Loop, Frame Snap, Shift+Wheel Speed)',
+                  'Adds A–B Loop and 1-click Clean Frame Screenshot buttons to YouTube\'s player bar plus Shift+Wheel 0.1x speed.',
+                  pu.youtubePlayerControls,
+                  () => void onUpdatePowerUps({ youtubePlayerControls: !pu.youtubePlayerControls }),
                 )}
                 {renderToggleRow(
                   'Auto-Dismiss "Are You Still Listening?"',
@@ -766,16 +878,75 @@ export function SettingsModal({
                       youtubeRememberSpeedQuality: !pu.youtubeRememberSpeedQuality,
                     }),
                 )}
+                {renderToggleRow(
+                  'YouTube Music: Playlist Quick-Filter & Queue Total Duration',
+                  'Adds an instant track/artist filter box atop large playlists and shows total remaining queue time in Up Next.',
+                  pu.ytmPlaylistQuickFilter,
+                  () => void onUpdatePowerUps({ ytmPlaylistQuickFilter: !pu.ytmPlaylistQuickFilter }),
+                )}
+                {renderToggleRow(
+                  'YouTube Music: Audio-Only Stage Mode',
+                  'Hides the video canvas on YouTube Music\'s player page for a distraction-free audio focus.',
+                  pu.ytmAudioOnlyMode,
+                  () => void onUpdatePowerUps({ ytmAudioOnlyMode: !pu.ytmAudioOnlyMode }),
+                )}
+              </section>
+
+              {/* Universal Music Trashbin (Auto-Skip Blocklist) */}
+              <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <h3 className="section-label">
+                  Universal Music Trashbin — Blocked Artists &amp; Songs ({settings.blockedMusic.length})
+                </h3>
+                <div className="setting-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
+                  <div className="setting-row__desc">
+                    Any artist or track blocked from the Mini-Player HUD or Artist Hub is automatically skipped across YouTube Music &amp; Spotify.
+                  </div>
+                  {settings.blockedMusic.length === 0 ? (
+                    <div className="setting-row__desc" style={{ opacity: 0.7 }}>
+                      No blocked artists or songs yet. Click the Block icon in the Mini-Player HUD or Artist Hub to banish AI-slop or unwanted artists.
+                    </div>
+                  ) : (
+                    <div className="np-tag-row">
+                      {settings.blockedMusic.map((item) => (
+                        <span key={item.id} className="keyword-chip">
+                          <span>
+                            {item.kind === 'artist' ? 'Artist' : 'Song'}: {item.value}
+                          </span>
+                          <button
+                            type="button"
+                            className="keyword-chip__x"
+                            title="Unblock"
+                            onClick={() => void onUnblockMusic(item.id)}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </section>
 
               {/* Twitch */}
               <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <h3 className="section-label">Twitch</h3>
                 {renderToggleRow(
-                  'Built-in 7TV, BetterTTV & FrankerFaceZ Emotes',
-                  'Renders global and channel third-party static & animated emotes directly inside Twitch chat.',
+                  'Built-in 7TV, BetterTTV & FrankerFaceZ Emotes + Tab-Autocomplete',
+                  'Renders third-party static & animated emotes in chat and completes emote names with Tab while typing.',
                   pu.twitchThirdPartyEmotes,
                   () => void onUpdatePowerUps({ twitchThirdPartyEmotes: !pu.twitchThirdPartyEmotes }),
+                )}
+                {renderToggleRow(
+                  'Auto-Recover Stalled Streams (Error #2000 / #3000 / #5000)',
+                  'Automatically clicks Refresh Player whenever Twitch throws a network error overlay mid-stream.',
+                  pu.twitchAutoRecover,
+                  () => void onUpdatePowerUps({ twitchAutoRecover: !pu.twitchAutoRecover }),
+                )}
+                {renderToggleRow(
+                  'Hide Hype Train, Gift Leaderboards & Recommended Clutter',
+                  'Strips distracting chat overlays and sidebar recommendations to keep focus on stream & chat.',
+                  pu.twitchHideClutter,
+                  () => void onUpdatePowerUps({ twitchHideClutter: !pu.twitchHideClutter }),
                 )}
                 {renderToggleRow(
                   'Auto-Claim Channel Points Bonus Chest',
@@ -807,6 +978,18 @@ export function SettingsModal({
                   () => void onUpdatePowerUps({ audibleDirectToLibrary: !pu.audibleDirectToLibrary }),
                 )}
                 {renderToggleRow(
+                  'Precision Speed Control (0.05× Steps) in Cloud Player',
+                  'Adds a floating 0.75×–3.0× fine speed control pill remembered per audiobook.',
+                  pu.audiblePrecisionSpeed,
+                  () => void onUpdatePowerUps({ audiblePrecisionSpeed: !pu.audiblePrecisionSpeed }),
+                )}
+                {renderToggleRow(
+                  'Strip Storefront & Upsell Clutter (Player-First Mode)',
+                  'Hides promotional merchandising banners and Audible Plus upsells on Library & Wishlist pages.',
+                  pu.audibleHideStoreClutter,
+                  () => void onUpdatePowerUps({ audibleHideStoreClutter: !pu.audibleHideStoreClutter }),
+                )}
+                {renderToggleRow(
                   'Dock Cloud Player Inside OmniDeck',
                   'Opens Audible Listen Now side-by-side with your Library instead of spawning a stray popup window.',
                   pu.audibleDockCloudPlayer,
@@ -834,7 +1017,7 @@ export function SettingsModal({
 
               {/* Reddit */}
               <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <h3 className="section-label">Reddit (RES-Lite)</h3>
+                <h3 className="section-label">Reddit (Modern RES Suite)</h3>
                 {renderToggleRow(
                   'Compact Desktop Density',
                   'Tightens card spacing and widens the desktop feed layout on Modern Reddit.',
@@ -848,7 +1031,31 @@ export function SettingsModal({
                   () => void onUpdatePowerUps({ redditUseOldReddit: !pu.redditUseOldReddit }),
                 )}
                 {renderToggleRow(
-                  'RES-Lite Keyboard Navigation (J / K / X / C)',
+                  'Hide "Games on Reddit", Trending & Recommended Feed Injections',
+                  'Strips "Because you visited", "Similar to r/", and Games bloat from Modern Reddit feeds.',
+                  pu.redditHideRecommended,
+                  () => void onUpdatePowerUps({ redditHideRecommended: !pu.redditHideRecommended }),
+                )}
+                {renderToggleRow(
+                  'Floating "Next Top-Level Comment" Jump Button (↓)',
+                  'Apollo / RIF-style floating button on comment threads to hop cleanly to the next parent comment.',
+                  pu.redditNextCommentButton,
+                  () => void onUpdatePowerUps({ redditNextCommentButton: !pu.redditNextCommentButton }),
+                )}
+                {renderToggleRow(
+                  'Hover Image Zoom & Exact Timestamps',
+                  'Hover over post thumbnails for instant full-size image previews and hover relative dates for exact timestamps.',
+                  pu.redditHoverZoom,
+                  () => void onUpdatePowerUps({ redditHoverZoom: !pu.redditHoverZoom }),
+                )}
+                {renderToggleRow(
+                  'Local Color-Coded User Tagger',
+                  'Click the subtle + pill next to any u/username to attach private color-coded tags across Reddit.',
+                  pu.redditUserTagger,
+                  () => void onUpdatePowerUps({ redditUserTagger: !pu.redditUserTagger }),
+                )}
+                {renderToggleRow(
+                  'RES Keyboard Navigation (J / K / X / C)',
                   'Press J/K to jump between posts, X to expand media, and C to open comments (disabled while typing).',
                   pu.redditKeyboardNav,
                   () => void onUpdatePowerUps({ redditKeyboardNav: !pu.redditKeyboardNav }),
@@ -865,11 +1072,86 @@ export function SettingsModal({
                   pu.redditHidePromoted,
                   () => void onUpdatePowerUps({ redditHidePromoted: !pu.redditHidePromoted }),
                 )}
+
+                <div className="setting-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
+                  <div>
+                    <div className="setting-row__title">Keyword &amp; Subreddit Feed Filter (filteReddit)</div>
+                    <div className="setting-row__desc">
+                      Hide Reddit posts matching any word, spoiler, or <code>r/subreddit</code> across Home and r/all.
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <input
+                      type="text"
+                      className="text-input"
+                      placeholder="Add keyword or r/subreddit (e.g. spoilers, r/politics)"
+                      value={redditKwInput}
+                      onChange={(e) => setRedditKwInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const val = redditKwInput.trim();
+                          if (val && !pu.redditFilteredKeywords.includes(val)) {
+                            void onUpdatePowerUps({
+                              redditFilteredKeywords: [...pu.redditFilteredKeywords, val],
+                            });
+                            setRedditKwInput('');
+                          }
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="pill-btn pill-btn--primary"
+                      onClick={() => {
+                        const val = redditKwInput.trim();
+                        if (val && !pu.redditFilteredKeywords.includes(val)) {
+                          void onUpdatePowerUps({
+                            redditFilteredKeywords: [...pu.redditFilteredKeywords, val],
+                          });
+                          setRedditKwInput('');
+                        }
+                      }}
+                    >
+                      Filter
+                    </button>
+                  </div>
+                  {pu.redditFilteredKeywords.length > 0 && (
+                    <div className="np-tag-row">
+                      {pu.redditFilteredKeywords.map((kw) => (
+                        <span key={kw} className="keyword-chip">
+                          <span>{kw}</span>
+                          <button
+                            type="button"
+                            className="keyword-chip__x"
+                            title={`Remove "${kw}"`}
+                            onClick={() =>
+                              void onUpdatePowerUps({
+                                redditFilteredKeywords: pu.redditFilteredKeywords.filter((x) => x !== kw),
+                              })
+                            }
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </section>
 
               {/* Spotify */}
               <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <h3 className="section-label">Spotify</h3>
+                {renderToggleRow(
+                  'Music-Only Mode (Hide Podcasts & Audiobooks + Queue Duration)',
+                  'Hides Podcast/Episode/Audiobook shelves from Spotify Home and shows total queue duration in Queue.',
+                  pu.spotifyHidePodcastsAudiobooks,
+                  () =>
+                    void onUpdatePowerUps({
+                      spotifyHidePodcastsAudiobooks: !pu.spotifyHidePodcastsAudiobooks,
+                    }),
+                )}
                 {renderToggleRow(
                   'Keep Spotify Connect Alive',
                   'Exempts Spotify from idle auto-hibernation so phone/speaker Spotify Connect stays connected.',

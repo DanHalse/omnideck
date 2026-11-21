@@ -1,15 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addBlockedMusicEntry,
+  addBookNote,
   buildMobilePowerUpsScript,
+  clampVolumeBoost,
   cleanTrackAndArtist,
   computeListeningStatsSummary,
   createDefaultConfig,
   DEFAULT_POWER_UPS,
   findActiveLyricIndex,
+  matchesBlockedMusic,
   mergeAiCompanionConfig,
   mergeEqualizerConfig,
+  mergeIntegrationsConfig,
   mergePersistedConfig,
   parseLrcLyrics,
+  removeBlockedMusicEntry,
+  removeBookNote,
   serializeConfigForExport,
   type ListeningEntry,
 } from './index.js';
@@ -98,12 +105,14 @@ describe('v1.4.0 audio, lyrics, AI & listening stats utilities', () => {
     expect(summary.byService[0].serviceId).toBe('youtube-music');
   });
 
-  it('clamps 10-band EQ values and merges AI companion defaults safely', () => {
+  it('clamps 10-band EQ values, compressor & volume boost, and merges AI companion defaults safely', () => {
     const eq = mergeEqualizerConfig({
       enabled: true,
       preset: 'custom',
       preampDb: 99,
       bands: [20, -30, 3.2],
+      compressorEnabled: true,
+      volumeBoost: 3.5,
     });
     expect(eq.preampDb).toBe(12);
     expect(eq.bands).toHaveLength(10);
@@ -111,6 +120,10 @@ describe('v1.4.0 audio, lyrics, AI & listening stats utilities', () => {
     expect(eq.bands[1]).toBe(-12);
     expect(eq.bands[2]).toBe(3);
     expect(eq.bands[9]).toBe(0);
+    expect(eq.compressorEnabled).toBe(true);
+    expect(eq.volumeBoost).toBe(2.0);
+    expect(clampVolumeBoost(0.4)).toBe(1.0);
+    expect(clampVolumeBoost(1.65)).toBe(1.65);
 
     const ai = mergeAiCompanionConfig({
       provider: 'gemini',
@@ -123,7 +136,7 @@ describe('v1.4.0 audio, lyrics, AI & listening stats utilities', () => {
     expect(ai.ollamaBaseUrl).toBe('http://localhost:11434');
   });
 
-  it('migrates legacy smartAudioSwitching to audioFocusMode and strips AI API keys on export', () => {
+  it('migrates legacy smartAudioSwitching to audioFocusMode and strips AI & scrobbler secrets on export', () => {
     const migratedOff = mergePersistedConfig({
       settings: { smartAudioSwitching: false } as unknown as ReturnType<typeof createDefaultConfig>['settings'],
     });
@@ -132,11 +145,25 @@ describe('v1.4.0 audio, lyrics, AI & listening stats utilities', () => {
     const cfg = createDefaultConfig();
     cfg.settings.aiCompanion.provider = 'openai';
     cfg.settings.aiCompanion.apiKey = 'sk-super-secret';
+    cfg.settings.integrations = mergeIntegrationsConfig({
+      discordRpcEnabled: true,
+      listenBrainzEnabled: true,
+      listenBrainzToken: 'lb-secret-token',
+      lastFmEnabled: true,
+      lastFmApiKey: 'lfm-pub-key',
+      lastFmApiSecret: 'lfm-super-secret',
+      lastFmSessionKey: 'lfm-session-key',
+    });
+
     const exported = JSON.parse(serializeConfigForExport(cfg)) as {
       config: ReturnType<typeof createDefaultConfig>;
     };
     expect(exported.config.settings.aiCompanion.apiKey).toBe('');
     expect(exported.config.settings.aiCompanion.provider).toBe('openai');
+    expect(exported.config.settings.integrations.listenBrainzToken).toBe('');
+    expect(exported.config.settings.integrations.lastFmApiSecret).toBe('');
+    expect(exported.config.settings.integrations.lastFmSessionKey).toBe('');
+    expect(exported.config.settings.integrations.discordRpcEnabled).toBe(true);
   });
 
   it('generates Reddit mobile anti-app-nag and Spotify mobile responsive drawer scripts', () => {
@@ -150,4 +177,42 @@ describe('v1.4.0 audio, lyrics, AI & listening stats utilities', () => {
     expect(spotifyScript).toContain('__od_sp_lib_btn');
     expect(spotifyScript).toContain('width=device-width');
   });
+
+  it('supports Universal Music Trashbin matching and Audible book notes state mutations', () => {
+    let cfg = createDefaultConfig();
+    cfg = addBlockedMusicEntry(cfg, { kind: 'artist', value: 'AI Slop Band' });
+    cfg = addBlockedMusicEntry(cfg, { kind: 'artist', value: 'ai slop band' }); // dedupe
+    cfg = addBlockedMusicEntry(cfg, {
+      kind: 'track',
+      value: 'Annoying Remix',
+      artist: 'Some DJ',
+    });
+    expect(cfg.settings.blockedMusic).toHaveLength(2);
+
+    expect(
+      matchesBlockedMusic('Random Song', 'AI Slop Band (Official)', cfg.settings.blockedMusic),
+    ).not.toBeNull();
+    expect(
+      matchesBlockedMusic('Annoying Remix', 'Some DJ', cfg.settings.blockedMusic),
+    ).not.toBeNull();
+    expect(
+      matchesBlockedMusic('Good Song', 'Radiohead', cfg.settings.blockedMusic),
+    ).toBeNull();
+
+    const firstId = cfg.settings.blockedMusic[0].id;
+    cfg = removeBlockedMusicEntry(cfg, firstId);
+    expect(cfg.settings.blockedMusic).toHaveLength(1);
+
+    cfg = addBookNote(cfg, {
+      bookTitle: 'Project Hail Mary',
+      timestampLabel: 'Ch. 4 • 1:12:30',
+      note: 'Fist my bump!',
+    });
+    expect(cfg.settings.bookNotes).toHaveLength(1);
+    expect(cfg.settings.bookNotes[0].bookTitle).toBe('Project Hail Mary');
+
+    cfg = removeBookNote(cfg, cfg.settings.bookNotes[0].id);
+    expect(cfg.settings.bookNotes).toHaveLength(0);
+  });
 });
+

@@ -311,6 +311,48 @@ export function AudioMixerModal({
                 </label>
               </div>
 
+              <div className="setting-row">
+                <div>
+                  <div className="setting-row__title">
+                    Live Audio Compressor (Loudness Leveler)
+                  </div>
+                  <div className="setting-row__desc">
+                    FFZ-style Dynamics Compressor evens out quiet voices vs loud screams on Twitch and quiet songs on YouTube Music.
+                  </div>
+                </div>
+                <label className="switch">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(equalizer.compressorEnabled)}
+                    onChange={(e) => onUpdateEqualizer({ compressorEnabled: e.target.checked })}
+                  />
+                  <span className="switch__track" />
+                </label>
+              </div>
+
+              <div className="setting-row">
+                <div>
+                  <div className="setting-row__title">
+                    Volume Booster ({Math.round((equalizer.volumeBoost ?? 1) * 100)}%)
+                  </div>
+                  <div className="setting-row__desc">
+                    Boost quiet streams or tracks up to 200% with automatic anti-clipping protection.
+                  </div>
+                </div>
+                <input
+                  type="range"
+                  aria-label="Volume booster percentage"
+                  className="volume-slider volume-slider--wide"
+                  min={100}
+                  max={200}
+                  step={5}
+                  value={Math.round((equalizer.volumeBoost ?? 1) * 100)}
+                  onChange={(e) =>
+                    onUpdateEqualizer({ volumeBoost: Number(e.target.value) / 100 })
+                  }
+                />
+              </div>
+
               <div className="eq-presets">
                 {(Object.keys(EQ_PRESETS) as Array<Exclude<EqPresetId, 'custom'>>).map((id) => (
                   <button

@@ -95,6 +95,11 @@ const api: OmniDeckBridge = {
 
   updateSettings: (patch) => ipcRenderer.invoke('omnideck:update-settings', patch),
   updatePowerUps: (patch) => ipcRenderer.invoke('omnideck:update-power-ups', patch),
+  updateIntegrations: (patch) => ipcRenderer.invoke('omnideck:update-integrations', patch),
+  blockMusic: (input) => ipcRenderer.invoke('omnideck:block-music', input),
+  unblockMusic: (entryId) => ipcRenderer.invoke('omnideck:unblock-music', entryId),
+  addBookNote: (input) => ipcRenderer.invoke('omnideck:add-book-note', input),
+  removeBookNote: (noteId) => ipcRenderer.invoke('omnideck:remove-book-note', noteId),
   addCustomService: (input) => ipcRenderer.invoke('omnideck:add-custom-service', input),
   updateService: (serviceId, patch) =>
     ipcRenderer.invoke('omnideck:update-service', serviceId, patch),

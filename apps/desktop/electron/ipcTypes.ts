@@ -7,6 +7,7 @@ import type {
   CustomServiceInput,
   DesktopSnapshot,
   EqualizerConfig,
+  IntegrationsConfig,
   ListeningStatsSummary,
   PowerUpsConfig,
   ServiceDefinition,
@@ -101,9 +102,14 @@ export interface OmniDeckBridge {
   saveCustomWorkspace: (name: string) => Promise<DesktopSnapshot>;
   deleteCustomWorkspace: (workspaceId: string) => Promise<DesktopSnapshot>;
 
-  // Settings, Power-Ups, Services & Cross-Device Sync
+  // Settings, Power-Ups, Trashbin, Book Notes, Integrations, Services & Cross-Device Sync
   updateSettings: (patch: Partial<AppSettings>) => Promise<DesktopSnapshot>;
   updatePowerUps: (patch: Partial<PowerUpsConfig>) => Promise<DesktopSnapshot>;
+  updateIntegrations: (patch: Partial<IntegrationsConfig>) => Promise<DesktopSnapshot>;
+  blockMusic: (input: { kind: 'artist' | 'track'; value: string; artist?: string }) => Promise<DesktopSnapshot>;
+  unblockMusic: (entryId: string) => Promise<DesktopSnapshot>;
+  addBookNote: (input: { bookTitle: string; timestampLabel: string; note: string; url?: string }) => Promise<DesktopSnapshot>;
+  removeBookNote: (noteId: string) => Promise<DesktopSnapshot>;
   addCustomService: (input: CustomServiceInput) => Promise<DesktopSnapshot>;
   updateService: (
     serviceId: string,

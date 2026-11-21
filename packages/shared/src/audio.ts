@@ -1,8 +1,11 @@
 import type {
   AiCompanionConfig,
   AiProviderId,
+  BlockedMusicEntry,
+  BookNoteEntry,
   EqPresetId,
   EqualizerConfig,
+  IntegrationsConfig,
   ListeningEntry,
   ListeningStatsSummary,
   LyricLine,
@@ -48,6 +51,17 @@ export const DEFAULT_EQUALIZER_CONFIG: EqualizerConfig = {
   preset: 'flat',
   preampDb: 0,
   bands: [...EQ_PRESETS.flat.bands],
+  compressorEnabled: false,
+  volumeBoost: 1.0,
+};
+
+export const DEFAULT_INTEGRATIONS_CONFIG: IntegrationsConfig = {
+  discordRpcEnabled: false,
+  discordClientId: '1345829018472906812',
+  listenBrainzToken: '',
+  lastFmApiKey: '',
+  lastFmApiSecret: '',
+  lastFmSessionKey: '',
 };
 
 export const AI_PROVIDER_DEFAULT_MODELS: Record<AiProviderId, string> = {
@@ -69,6 +83,11 @@ export const DEFAULT_AI_COMPANION_CONFIG: AiCompanionConfig = {
 export function clampBandDb(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.min(12, Math.max(-12, Math.round(value * 2) / 2));
+}
+
+export function clampVolumeBoost(value: number): number {
+  if (!Number.isFinite(value)) return 1.0;
+  return Math.min(2.0, Math.max(1.0, Math.round(value * 20) / 20));
 }
 
 export function clampDuckLevel(value: number): number {
@@ -101,7 +120,115 @@ export function mergeEqualizerConfig(raw?: Partial<EqualizerConfig> | null): Equ
     preset,
     preampDb: clampBandDb(Number(raw.preampDb ?? 0)),
     bands,
+    compressorEnabled: Boolean(raw.compressorEnabled),
+    volumeBoost: clampVolumeBoost(Number(raw.volumeBoost ?? 1.0)),
   };
+}
+
+export function mergeIntegrationsConfig(
+  raw?: Partial<IntegrationsConfig> | null,
+): IntegrationsConfig {
+  if (!raw || typeof raw !== 'object') {
+    return { ...DEFAULT_INTEGRATIONS_CONFIG };
+  }
+  return {
+    discordRpcEnabled: Boolean(raw.discordRpcEnabled),
+    discordClientId:
+      typeof raw.discordClientId === 'string' && raw.discordClientId.trim()
+        ? raw.discordClientId.trim()
+        : DEFAULT_INTEGRATIONS_CONFIG.discordClientId,
+    listenBrainzToken: typeof raw.listenBrainzToken === 'string' ? raw.listenBrainzToken.trim() : '',
+    lastFmApiKey: typeof raw.lastFmApiKey === 'string' ? raw.lastFmApiKey.trim() : '',
+    lastFmApiSecret: typeof raw.lastFmApiSecret === 'string' ? raw.lastFmApiSecret.trim() : '',
+    lastFmSessionKey: typeof raw.lastFmSessionKey === 'string' ? raw.lastFmSessionKey.trim() : '',
+  };
+}
+
+export function normalizeBlockedMusic(raw: unknown): BlockedMusicEntry[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: BlockedMusicEntry[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const rec = item as Partial<BlockedMusicEntry>;
+    const kind = rec.kind === 'track' ? 'track' : rec.kind === 'artist' ? 'artist' : null;
+    const value = typeof rec.value === 'string' ? rec.value.trim().slice(0, 140) : '';
+    if (!kind || !value) continue;
+    const key = `${kind}::${value.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      id: typeof rec.id === 'string' && rec.id.trim() ? rec.id : `blk-${Date.now()}-${out.length}`,
+      kind,
+      value,
+      artist: typeof rec.artist === 'string' && rec.artist.trim() ? rec.artist.trim().slice(0, 120) : undefined,
+      addedAt: typeof rec.addedAt === 'number' && Number.isFinite(rec.addedAt) ? rec.addedAt : Date.now(),
+    });
+    if (out.length >= 250) break;
+  }
+  return out;
+}
+
+export function normalizeBookNotes(raw: unknown): BookNoteEntry[] {
+  if (!Array.isArray(raw)) return [];
+  const out: BookNoteEntry[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const rec = item as Partial<BookNoteEntry>;
+    const bookTitle = typeof rec.bookTitle === 'string' ? rec.bookTitle.trim().slice(0, 160) : '';
+    const note = typeof rec.note === 'string' ? rec.note.trim().slice(0, 1000) : '';
+    if (!bookTitle || !note) continue;
+    out.push({
+      id: typeof rec.id === 'string' && rec.id.trim() ? rec.id : `note-${Date.now()}-${out.length}`,
+      bookTitle,
+      timestampLabel:
+        typeof rec.timestampLabel === 'string' && rec.timestampLabel.trim()
+          ? rec.timestampLabel.trim().slice(0, 40)
+          : '0:00',
+      note,
+      url: typeof rec.url === 'string' && /^https?:\/\//i.test(rec.url) ? rec.url : undefined,
+      createdAt: typeof rec.createdAt === 'number' && Number.isFinite(rec.createdAt) ? rec.createdAt : Date.now(),
+    });
+    if (out.length >= 250) break;
+  }
+  return out;
+}
+
+/**
+ * Checks whether the currently playing track or artist matches the user's universal Trashbin blocklist.
+ */
+export function matchesBlockedMusic(
+  rawTitle: string,
+  rawArtist: string | undefined,
+  entries: BlockedMusicEntry[],
+): BlockedMusicEntry | null {
+  if (!entries || entries.length === 0) return null;
+  const cleaned = cleanTrackAndArtist(rawTitle, rawArtist);
+  const titleNorm = (cleaned.track || rawTitle || '').trim().toLowerCase();
+  const artistNorm = (cleaned.artist || rawArtist || '').trim().toLowerCase();
+  const rawArtistNorm = (rawArtist || '').trim().toLowerCase();
+
+  for (const entry of entries) {
+    const val = entry.value.trim().toLowerCase();
+    if (!val) continue;
+    if (entry.kind === 'artist') {
+      if (
+        (artistNorm && (artistNorm === val || artistNorm.includes(val))) ||
+        (rawArtistNorm && (rawArtistNorm === val || rawArtistNorm.includes(val)))
+      ) {
+        return entry;
+      }
+    } else if (entry.kind === 'track') {
+      if (titleNorm && (titleNorm === val || titleNorm.includes(val))) {
+        if (!entry.artist) return entry;
+        const entryArtist = entry.artist.trim().toLowerCase();
+        if (!artistNorm || artistNorm.includes(entryArtist) || rawArtistNorm.includes(entryArtist)) {
+          return entry;
+        }
+      }
+    }
+  }
+  return null;
 }
 
 export function mergeAiCompanionConfig(raw?: Partial<AiCompanionConfig> | null): AiCompanionConfig {

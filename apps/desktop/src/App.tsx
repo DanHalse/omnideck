@@ -466,6 +466,7 @@ export function App() {
             recentActivity={config.recentActivity}
             sleepTimer={sleepTimer}
             listeningStats={listeningStats}
+            bookNotes={config.settings.bookNotes}
             onSelectService={(id) => void api.selectService(id)}
             onOpenInSplit={(id) => void api.toggleSplitView(true, id)}
             onOpenUrlInService={(id, url) => void api.openServiceUrl(id, url)}
@@ -475,6 +476,8 @@ export function App() {
             onClearListeningStats={() => {
               void api.clearListeningStats().then((empty) => setListeningStats(empty));
             }}
+            onAddBookNote={(input) => void api.addBookNote(input)}
+            onRemoveBookNote={(noteId) => void api.removeBookNote(noteId)}
             onApplyWorkspace={(wsId) => void api.applyWorkspace(wsId)}
             onSetSleepTimer={(mins) => void api.setSleepTimer(mins)}
             onOpenMixer={() => {
@@ -531,6 +534,7 @@ export function App() {
             onLoadDossier={(input) => api.getArtistDossier(input)}
             onLoadBandDetails={(bandName) => api.getBandDetails(bandName)}
             onAskAi={(dossier, q) => api.askMusicAi(dossier, q)}
+            onBlockMusic={(input) => void api.blockMusic(input)}
           />
         )}
 
@@ -678,6 +682,12 @@ export function App() {
           }}
           onUpdatePowerUps={async (patch) => {
             await api.updatePowerUps(patch);
+          }}
+          onUpdateIntegrations={async (patch) => {
+            await api.updateIntegrations(patch);
+          }}
+          onUnblockMusic={async (entryId) => {
+            await api.unblockMusic(entryId);
           }}
           onTestAiConnection={(cfg) => api.testAiConnection(cfg)}
           onRefreshMemory={async () => {

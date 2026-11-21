@@ -18,8 +18,16 @@ interface CacheEntry<T> {
   expiresAt: number;
 }
 
+export interface YouTubeDislikeStats {
+  likes: number;
+  dislikes: number;
+  rating?: number;
+}
+
 const sponsorCache = new Map<string, CacheEntry<SponsorSegment[]>>();
 const emoteCache = new Map<string, CacheEntry<Record<string, string>>>();
+const dislikeCache = new Map<string, CacheEntry<YouTubeDislikeStats | null>>();
+const deArrowCache = new Map<string, CacheEntry<string | null>>();
 let globalEmotesCache: CacheEntry<Record<string, string>> | null = null;
 
 async function fetchJsonWithTimeout(url: string, timeoutMs = 3500): Promise<unknown> {
@@ -37,6 +45,59 @@ async function fetchJsonWithTimeout(url: string, timeoutMs = 3500): Promise<unkn
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Ad-free Return YouTube Dislike lookup via public returnyoutubedislikeapi.com JSON endpoint.
+ */
+export async function fetchYouTubeDislikes(videoId: string): Promise<YouTubeDislikeStats | null> {
+  if (!videoId || !/^[a-zA-Z0-9_-]{11}$/.test(videoId)) return null;
+  const cached = dislikeCache.get(videoId);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+  const raw = await fetchJsonWithTimeout(
+    `https://returnyoutubedislikeapi.com/votes?videoId=${encodeURIComponent(videoId)}`,
+    3500,
+  );
+  let stats: YouTubeDislikeStats | null = null;
+  if (raw && typeof raw === 'object') {
+    const rec = raw as { likes?: unknown; dislikes?: unknown; rating?: unknown };
+    if (typeof rec.dislikes === 'number' && Number.isFinite(rec.dislikes)) {
+      stats = {
+        likes: typeof rec.likes === 'number' && Number.isFinite(rec.likes) ? rec.likes : 0,
+        dislikes: Math.max(0, Math.round(rec.dislikes)),
+        rating: typeof rec.rating === 'number' ? rec.rating : undefined,
+      };
+    }
+  }
+  dislikeCache.set(videoId, { value: stats, expiresAt: Date.now() + 20 * 60_000 });
+  return stats;
+}
+
+/**
+ * Fetches crowdsourced anti-clickbait video title from SponsorBlock's free DeArrow API.
+ */
+export async function fetchDeArrowTitle(videoId: string): Promise<string | null> {
+  if (!videoId || !/^[a-zA-Z0-9_-]{11}$/.test(videoId)) return null;
+  const cached = deArrowCache.get(videoId);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+  const raw = await fetchJsonWithTimeout(
+    `https://sponsor.ajay.app/api/branding?videoID=${encodeURIComponent(videoId)}`,
+    3200,
+  );
+  let cleanTitle: string | null = null;
+  if (raw && typeof raw === 'object') {
+    const rec = raw as { titles?: Array<{ title?: string; votes?: number; locked?: boolean }> };
+    if (Array.isArray(rec.titles) && rec.titles.length > 0) {
+      const top = rec.titles.find((t) => t && typeof t.title === 'string' && t.title.trim() && (t.votes ?? 0) >= 0);
+      if (top?.title) {
+        cleanTitle = top.title.replace(/^>/, '').trim();
+      }
+    }
+  }
+  deArrowCache.set(videoId, { value: cleanTitle, expiresAt: Date.now() + 30 * 60_000 });
+  return cleanTitle;
 }
 
 /**
@@ -229,9 +290,13 @@ export async function fetchTwitchEmotes(channelLogin: string): Promise<Record<st
 
 /**
  * Injected YouTube / YouTube Music Power-Up runtime:
- * - SponsorBlock segment skipper with in-player "Skipped [category] • Undo" pill
- * - Auto-dismiss "Are you still listening?" / "Video paused" dialogs
+ * - SponsorBlock segment skipper with Undo pill
+ * - Auto-dismiss "Are you still listening?" dialogs
  * - Remember preferred playback speed on YouTube
+ * - Force Original Audio Track (kills forced AI auto-dubbing)
+ * - Hide End-Screen cards & Mixes/Playables + Disable Hover Auto-Play Previews
+ * - Player Power Controls: A-B Loop, Clean Frame Screenshot, Shift+Wheel fine speed
+ * - YouTube Music Audio-Only Mode + Live Playlist Quick-Filter & Queue Total Duration
  */
 export function buildYouTubePowerUpScript(
   serviceId: 'youtube' | 'youtube-music',
@@ -240,46 +305,87 @@ export function buildYouTubePowerUpScript(
   const isMusic = serviceId === 'youtube-music';
   return `(function () {
     window.__odYtCfg = {
+      isMusic: ${isMusic},
       sponsorBlock: ${Boolean(powerUps.youtubeSponsorBlock)},
       autoDismiss: ${Boolean(powerUps.youtubeAutoDismissStillListening)},
-      rememberSpeed: ${Boolean(!isMusic && powerUps.youtubeRememberSpeedQuality)}
+      rememberSpeed: ${Boolean(!isMusic && powerUps.youtubeRememberSpeedQuality)},
+      forceOriginalAudio: ${Boolean(!isMusic && powerUps.youtubeForceOriginalAudio)},
+      hideEndScreens: ${Boolean(!isMusic && powerUps.youtubeHideEndScreens)},
+      disableHoverPreview: ${Boolean(!isMusic && powerUps.youtubeDisableHoverPreview)},
+      playerControls: ${Boolean(!isMusic && powerUps.youtubePlayerControls)},
+      ytmAudioOnly: ${Boolean(isMusic && powerUps.ytmAudioOnlyMode)},
+      ytmPlaylistFilter: ${Boolean(isMusic && powerUps.ytmPlaylistQuickFilter)}
     };
+
+    const syncDynamicCss = () => {
+      let st = document.getElementById('__od_yt_powerup_css');
+      if (!st) {
+        st = document.createElement('style');
+        st.id = '__od_yt_powerup_css';
+        (document.head || document.documentElement).appendChild(st);
+      }
+      const rules = [];
+      if (window.__odYtCfg.hideEndScreens) {
+        rules.push('.ytp-ce-element, .ytp-endscreen-content, .ytp-cards-teaser, ytd-rich-section-renderer:has(a[href*="/playables"]) { display: none !important; }');
+      }
+      if (window.__odYtCfg.disableHoverPreview) {
+        rules.push('ytd-video-preview, #video-preview, #mouseover-overlay, #hover-overlays { display: none !important; pointer-events: none !important; }');
+      }
+      if (window.__odYtCfg.ytmAudioOnly) {
+        rules.push('ytmusic-player[player-ui-state="PLAYER_PAGE_OPEN"] #song-video, ytmusic-player[player-ui-state="PLAYER_PAGE_OPEN"] .html5-video-player video { opacity: 0 !important; pointer-events: none !important; }');
+      }
+      st.textContent = rules.join('\\n');
+    };
+    syncDynamicCss();
 
     if (!window.__odYtInit) {
       window.__odYtInit = true;
       window.__odSponsorSegments = [];
       window.__odSponsorVideoId = '';
       window.__odSponsorSkippedKeys = new Set();
+      window.__odAbLoop = { a: null, b: null };
 
-      const showUndoPill = (label, undoStart) => {
+      const showMiniToast = (msg, undoStart) => {
         const old = document.getElementById('__od_sb_toast');
         if (old) old.remove();
         const toast = document.createElement('div');
         toast.id = '__od_sb_toast';
         toast.style.cssText = 'position:fixed;bottom:78px;right:20px;z-index:2147483647;display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:10px;background:rgba(15,17,26,0.92);color:#fff;font:600 12px/1.2 system-ui,sans-serif;border:1px solid rgba(255,255,255,0.16);box-shadow:0 8px 24px rgba(0,0,0,0.45);backdrop-filter:blur(8px);';
         const txt = document.createElement('span');
-        txt.textContent = 'Skipped ' + label;
-        const btn = document.createElement('button');
-        btn.textContent = 'Undo';
-        btn.style.cssText = 'border:none;background:#6366F1;color:#fff;padding:4px 9px;border-radius:6px;font:600 11px system-ui,sans-serif;cursor:pointer;';
-        btn.onclick = () => {
-          const v = document.querySelector('video');
-          if (v) v.currentTime = Math.max(0, undoStart);
-          toast.remove();
-        };
+        txt.textContent = msg;
         toast.appendChild(txt);
-        toast.appendChild(btn);
+        if (typeof undoStart === 'number') {
+          const btn = document.createElement('button');
+          btn.textContent = 'Undo';
+          btn.style.cssText = 'border:none;background:#E87A3E;color:#fff;padding:4px 9px;border-radius:6px;font:600 11px system-ui,sans-serif;cursor:pointer;';
+          btn.onclick = () => {
+            const v = document.querySelector('video');
+            if (v) v.currentTime = Math.max(0, undoStart);
+            toast.remove();
+          };
+          toast.appendChild(btn);
+        }
         document.body.appendChild(toast);
-        setTimeout(() => { if (toast.parentNode) toast.remove(); }, 5200);
+        setTimeout(() => { if (toast.parentNode) toast.remove(); }, 4200);
       };
 
-      const checkSponsorSkip = () => {
+      const checkSponsorAndLoop = () => {
+        const v = document.querySelector('video.html5-main-video') || document.querySelector('video');
+        if (!v || v.paused || !Number.isFinite(v.currentTime)) return;
+        const t = v.currentTime;
+
+        // A-B Loop
+        const ab = window.__odAbLoop;
+        if (ab && typeof ab.a === 'number' && typeof ab.b === 'number' && ab.b > ab.a + 0.25) {
+          if (t >= ab.b || t < ab.a - 0.5) {
+            v.currentTime = ab.a;
+            return;
+          }
+        }
+
         if (!window.__odYtCfg.sponsorBlock) return;
         const segs = window.__odSponsorSegments;
         if (!Array.isArray(segs) || segs.length === 0) return;
-        const v = document.querySelector('video');
-        if (!v || v.paused || !Number.isFinite(v.currentTime)) return;
-        const t = v.currentTime;
         for (let i = 0; i < segs.length; i++) {
           const s = segs[i];
           const key = window.__odSponsorVideoId + ':' + s.start + '-' + s.end;
@@ -287,13 +393,13 @@ export function buildYouTubePowerUpScript(
             window.__odSponsorSkippedKeys.add(key);
             v.currentTime = s.end;
             const pretty = s.category === 'music_offtopic' ? 'non-music intro' : s.category;
-            showUndoPill(pretty, s.start);
+            showMiniToast('Skipped ' + pretty, s.start);
             break;
           }
         }
       };
 
-      document.addEventListener('timeupdate', checkSponsorSkip, true);
+      document.addEventListener('timeupdate', checkSponsorAndLoop, true);
 
       // Remember preferred YouTube playback speed across videos
       const SPEED_KEY = '__omnideck_yt_speed';
@@ -315,22 +421,201 @@ export function buildYouTubePowerUpScript(
       }, true);
       document.addEventListener('loadedmetadata', (ev) => {
         if (ev && ev.target && ev.target.tagName === 'VIDEO') {
+          window.__odAbLoop = { a: null, b: null };
           applySavedSpeed(ev.target);
         }
       }, true);
 
-      // Auto-dismiss "Are you still listening?" / "Video paused. Continue watching?"
-      setInterval(() => {
-        if (!window.__odYtCfg.autoDismiss) return;
-        const btns = document.querySelectorAll(
-          'yt-confirm-dialog-renderer #confirm-button button, ytmusic-you-there-renderer button, tp-yt-paper-dialog yt-button-renderer#confirm-button button'
-        );
-        for (const btn of btns) {
-          if (btn && btn.offsetParent !== null) {
-            try { btn.click(); } catch {}
+      // Force Original Audio Track (defeats YouTube's forced AI auto-dubbing)
+      const enforceOriginalAudio = () => {
+        if (!window.__odYtCfg.forceOriginalAudio) return;
+        try {
+          const player = document.getElementById('movie_player');
+          if (!player || typeof player.getAvailableAudioTracks !== 'function' || typeof player.getAudioTrack !== 'function') return;
+          const tracks = player.getAvailableAudioTracks();
+          if (!Array.isArray(tracks) || tracks.length < 2) return;
+          const current = player.getAudioTrack();
+          const curStr = JSON.stringify(current || '').toLowerCase();
+          if (!curStr.includes('auto-dub') && !curStr.includes('dubbed') && !curStr.includes('auto_dub')) return;
+          const orig = tracks.find((tr) => {
+            const s = JSON.stringify(tr || '').toLowerCase();
+            return s.includes('original') || (!s.includes('dub') && s.includes('default'));
+          }) || tracks.find((tr) => !JSON.stringify(tr || '').toLowerCase().includes('dub'));
+          if (orig && typeof player.setAudioTrack === 'function') {
+            player.setAudioTrack(orig);
+            showMiniToast('Switched to Original Audio Track');
+          }
+        } catch {}
+      };
+
+      // Shift+Wheel over YouTube video for crisp 0.1x playback speed adjustment
+      document.addEventListener('wheel', (ev) => {
+        if (!window.__odYtCfg.playerControls || !ev.shiftKey) return;
+        const target = ev.target;
+        if (!target || !target.closest || !target.closest('#movie_player')) return;
+        const v = document.querySelector('video.html5-main-video');
+        if (!v) return;
+        ev.preventDefault();
+        const delta = ev.deltaY < 0 ? 0.1 : -0.1;
+        const next = Math.min(4.0, Math.max(0.25, Math.round((v.playbackRate + delta) * 10) / 10));
+        v.playbackRate = next;
+        showMiniToast('Speed ' + next.toFixed(1) + 'x');
+      }, { passive: false, capture: true });
+
+      // Inject A-B Loop & Clean Frame Screenshot controls into YouTube player bar
+      const ensurePlayerButtons = () => {
+        if (!window.__odYtCfg.playerControls) return;
+        const rightControls = document.querySelector('#movie_player .ytp-right-controls');
+        if (!rightControls || document.getElementById('__od_yt_shot_btn')) return;
+
+        const fmtT = (s) => {
+          const m = Math.floor(s / 60);
+          const r = Math.floor(s % 60);
+          return m + ':' + String(r).padStart(2, '0');
+        };
+
+        const abBtn = document.createElement('button');
+        abBtn.id = '__od_yt_ab_btn';
+        abBtn.className = 'ytp-button';
+        abBtn.title = 'OmniDeck A-B Loop (click to set A, B, or clear)';
+        abBtn.style.cssText = 'width:auto;padding:0 7px;font:700 11px/1 system-ui,sans-serif;vertical-align:top;color:#fff;opacity:0.88;';
+        abBtn.textContent = 'A-B';
+        abBtn.onclick = (e) => {
+          e.stopPropagation();
+          const v = document.querySelector('video.html5-main-video');
+          if (!v) return;
+          const ab = window.__odAbLoop;
+          if (ab.a === null) {
+            ab.a = v.currentTime;
+            ab.b = null;
+            abBtn.textContent = 'A:' + fmtT(ab.a);
+            abBtn.style.color = '#E87A3E';
+            showMiniToast('Loop start set at ' + fmtT(ab.a));
+          } else if (ab.b === null && v.currentTime > ab.a + 0.3) {
+            ab.b = v.currentTime;
+            abBtn.textContent = 'A-B ON';
+            abBtn.style.color = '#3ECF8E';
+            showMiniToast('Looping ' + fmtT(ab.a) + ' - ' + fmtT(ab.b));
+          } else {
+            ab.a = null;
+            ab.b = null;
+            abBtn.textContent = 'A-B';
+            abBtn.style.color = '#fff';
+            showMiniToast('A-B Loop cleared');
+          }
+        };
+
+        const shotBtn = document.createElement('button');
+        shotBtn.id = '__od_yt_shot_btn';
+        shotBtn.className = 'ytp-button';
+        shotBtn.title = 'OmniDeck Clean Frame Screenshot (copies PNG to clipboard)';
+        shotBtn.style.cssText = 'width:auto;padding:0 7px;font:700 11px/1 system-ui,sans-serif;vertical-align:top;color:#fff;opacity:0.88;';
+        shotBtn.textContent = 'SNAP';
+        shotBtn.onclick = (e) => {
+          e.stopPropagation();
+          try {
+            const v = document.querySelector('video.html5-main-video');
+            if (!v || !v.videoWidth || !v.videoHeight) return;
+            const canvas = document.createElement('canvas');
+            canvas.width = v.videoWidth;
+            canvas.height = v.videoHeight;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return;
+            ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+            canvas.toBlob((blob) => {
+              if (!blob) return;
+              if (navigator.clipboard && window.ClipboardItem) {
+                navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+                  .then(() => showMiniToast('Frame copied to clipboard'))
+                  .catch(() => {
+                    const a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = 'omnideck-frame-' + Math.floor(v.currentTime) + 's.png';
+                    a.click();
+                    showMiniToast('Frame saved as PNG');
+                  });
+              }
+            }, 'image/png');
+          } catch {}
+        };
+
+        rightControls.insertBefore(shotBtn, rightControls.firstChild);
+        rightControls.insertBefore(abBtn, shotBtn);
+      };
+
+      // YouTube Music Playlist Quick-Filter & Up Next Total Duration
+      const ensureYtmPlaylistFilter = () => {
+        if (!window.__odYtCfg.isMusic || !window.__odYtCfg.ytmPlaylistFilter) return;
+        const list = document.querySelector('ytmusic-playlist-shelf-renderer #contents');
+        if (list && !document.getElementById('__od_ytm_filter_bar')) {
+          const bar = document.createElement('div');
+          bar.id = '__od_ytm_filter_bar';
+          bar.style.cssText = 'display:flex;align-items:center;gap:8px;margin:0 0 10px 0;padding:6px 10px;border-radius:10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);';
+          const inp = document.createElement('input');
+          inp.type = 'search';
+          inp.placeholder = 'Filter playlist tracks or artists…';
+          inp.style.cssText = 'flex:1;background:transparent;border:none;outline:none;color:#fff;font:500 13px system-ui,sans-serif;';
+          const countEl = document.createElement('span');
+          countEl.style.cssText = 'font:600 11px system-ui,sans-serif;color:rgba(255,255,255,0.62);';
+          const applyFilter = () => {
+            const q = inp.value.trim().toLowerCase();
+            const rows = list.querySelectorAll('ytmusic-responsive-list-item-renderer');
+            let shown = 0;
+            rows.forEach((row) => {
+              const hit = !q || (row.textContent || '').toLowerCase().includes(q);
+              row.style.display = hit ? '' : 'none';
+              if (hit) shown++;
+            });
+            countEl.textContent = q ? (shown + ' / ' + rows.length) : (rows.length + ' tracks');
+          };
+          inp.addEventListener('input', applyFilter);
+          bar.appendChild(inp);
+          bar.appendChild(countEl);
+          list.parentElement && list.parentElement.insertBefore(bar, list);
+          applyFilter();
+        }
+
+        // Queue Total Duration Badge on Up Next tab
+        const queueItems = document.querySelectorAll('ytmusic-player-queue-item .duration');
+        if (queueItems.length > 0) {
+          let totalSec = 0;
+          queueItems.forEach((el) => {
+            const parts = (el.textContent || '').trim().split(':').map((n) => parseInt(n, 10));
+            if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) totalSec += parts[0] * 60 + parts[1];
+            else if (parts.length === 3 && !isNaN(parts[0])) totalSec += parts[0] * 3600 + parts[1] * 60 + parts[2];
+          });
+          const header = document.querySelector('ytmusic-player-queue #automix-contents')?.parentElement || document.querySelector('ytmusic-tab-renderer[page-type="MUSIC_PAGE_TYPE_PLAYLIST_QUEUE"]');
+          if (header && totalSec > 0) {
+            let badge = document.getElementById('__od_ytm_queue_dur');
+            if (!badge) {
+              badge = document.createElement('div');
+              badge.id = '__od_ytm_queue_dur';
+              badge.style.cssText = 'font:600 11px system-ui,sans-serif;color:rgba(255,255,255,0.65);padding:4px 12px;';
+              header.prepend(badge);
+            }
+            const h = Math.floor(totalSec / 3600);
+            const m = Math.floor((totalSec % 3600) / 60);
+            badge.textContent = 'Queue: ' + queueItems.length + ' tracks · ' + (h > 0 ? (h + 'h ' + m + 'm') : (m + 'm'));
           }
         }
-      }, 3500);
+      };
+
+      // Periodic watcher: dismiss "Still listening?", enforce original audio, mount buttons & YTM filter
+      setInterval(() => {
+        if (window.__odYtCfg.autoDismiss) {
+          const btns = document.querySelectorAll(
+            'yt-confirm-dialog-renderer #confirm-button button, ytmusic-you-there-renderer button, tp-yt-paper-dialog yt-button-renderer#confirm-button button'
+          );
+          for (const btn of btns) {
+            if (btn && btn.offsetParent !== null) {
+              try { btn.click(); } catch {}
+            }
+          }
+        }
+        enforceOriginalAudio();
+        ensurePlayerButtons();
+        ensureYtmPlaylistFilter();
+      }, 2600);
     }
   })();`;
 }
@@ -349,11 +634,89 @@ export function buildSponsorSegmentsInjector(
 }
 
 /**
+ * Injects Return YouTube Dislike count + subtle like/dislike ratio bar into YouTube's watch page.
+ */
+export function buildYouTubeDislikesInjector(
+  videoId: string,
+  likes: number,
+  dislikes: number,
+): string {
+  return `(function () {
+    try {
+      const vid = ${JSON.stringify(videoId)};
+      if (!location.search.includes(vid)) return;
+      const fmt = (n) => {
+        if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\\.0$/, '') + 'M';
+        if (n >= 1000) return (n / 1000).toFixed(1).replace(/\\.0$/, '') + 'K';
+        return String(n);
+      };
+      const dislikeBtn =
+        document.querySelector('dislike-button-view-model button') ||
+        document.querySelector('#segmented-dislike-button button') ||
+        document.querySelector('ytd-watch-metadata button[aria-label*="Dislike" i]');
+      if (!dislikeBtn) return;
+
+      let label = dislikeBtn.querySelector('#__od_ryd_count');
+      if (!label) {
+        label = document.createElement('span');
+        label.id = '__od_ryd_count';
+        label.style.cssText = 'margin-left:6px;font:600 13px/1 Roboto,system-ui,sans-serif;white-space:nowrap;';
+        dislikeBtn.appendChild(label);
+      }
+      label.textContent = fmt(${Math.max(0, Math.round(dislikes))});
+      dislikeBtn.title = 'Dislikes (Return YouTube Dislike): ' + (${Math.max(0, Math.round(dislikes))}).toLocaleString();
+
+      const total = Math.max(1, ${Math.max(0, Math.round(likes))} + ${Math.max(0, Math.round(dislikes))});
+      const pct = Math.min(100, Math.max(0, Math.round((${Math.max(0, Math.round(likes))} / total) * 100)));
+      const seg = dislikeBtn.closest('segmented-like-dislike-button-view-model, ytd-segmented-like-dislike-button-renderer');
+      if (seg) {
+        seg.style.position = 'relative';
+        let bar = seg.querySelector('#__od_ryd_bar');
+        if (!bar) {
+          bar = document.createElement('div');
+          bar.id = '__od_ryd_bar';
+          bar.style.cssText = 'position:absolute;left:8px;right:8px;bottom:-4px;height:2px;border-radius:2px;background:rgba(240,82,82,0.75);overflow:hidden;pointer-events:none;';
+          const fill = document.createElement('div');
+          fill.id = '__od_ryd_fill';
+          fill.style.cssText = 'height:100%;background:#3ECF8E;';
+          bar.appendChild(fill);
+          seg.appendChild(bar);
+        }
+        const fill = bar.querySelector('#__od_ryd_fill');
+        if (fill) fill.style.width = pct + '%';
+      }
+    } catch {}
+  })();`;
+}
+
+/**
+ * Replaces clickbait ALL-CAPS watch titles with crowdsourced DeArrow clean title (hover shows original).
+ */
+export function buildDeArrowInjector(videoId: string, cleanTitle: string): string {
+  return `(function () {
+    try {
+      const vid = ${JSON.stringify(videoId)};
+      if (!location.search.includes(vid)) return;
+      const h1 = document.querySelector('ytd-watch-metadata h1 yt-formatted-string, #title h1 yt-formatted-string');
+      if (!h1) return;
+      const orig = h1.getAttribute('data-od-orig-title') || (h1.textContent || '').trim();
+      if (!h1.getAttribute('data-od-orig-title') && orig) {
+        h1.setAttribute('data-od-orig-title', orig);
+      }
+      h1.textContent = ${JSON.stringify(cleanTitle)};
+      h1.title = 'DeArrow clean title · Original: ' + orig;
+    } catch {}
+  })();`;
+}
+
+/**
  * Injected Twitch Power-Up runtime:
- * - Built-in 7TV / BTTV / FFZ chat emote replacement
+ * - Built-in 7TV / BTTV / FFZ chat emote replacement + Tab-autocomplete in chat input
  * - Auto-claim Channel Points bonus chest (+50)
  * - Auto Theater Mode toggle
  * - Pause fast chat scrolling while hovering over chat
+ * - Auto-recover stalled streams / Error #2000/#3000/#5000 player freezes
+ * - Hide Hype Train, Gift Sub leaderboard & Recommended sidebar clutter
  */
 export function buildTwitchPowerUpScript(powerUps: PowerUpsConfig): string {
   return `(function () {
@@ -361,8 +724,26 @@ export function buildTwitchPowerUpScript(powerUps: PowerUpsConfig): string {
       emotes: ${Boolean(powerUps.twitchThirdPartyEmotes)},
       autoClaim: ${Boolean(powerUps.twitchAutoClaimPoints)},
       autoTheater: ${Boolean(powerUps.twitchAutoTheater)},
-      pauseChatHover: ${Boolean(powerUps.twitchPauseChatOnHover)}
+      pauseChatHover: ${Boolean(powerUps.twitchPauseChatOnHover)},
+      autoRecover: ${Boolean(powerUps.twitchAutoRecover)},
+      hideClutter: ${Boolean(powerUps.twitchHideClutter)}
     };
+
+    const syncTwitchCss = () => {
+      let st = document.getElementById('__od_twitch_powerup_css');
+      if (!st) {
+        st = document.createElement('style');
+        st.id = '__od_twitch_powerup_css';
+        (document.head || document.documentElement).appendChild(st);
+      }
+      st.textContent = window.__odTwitchCfg.hideClutter
+        ? [
+            '[data-test-selector="community-highlight-stack"], .channel-leaderboard, .hype-train-banner,',
+            '[aria-label="Recommended Channels"], [data-a-target="recommended-channel-card"] { display: none !important; }'
+          ].join('\\n')
+        : '';
+    };
+    syncTwitchCss();
 
     const tryAutoTheater = () => {
       if (!window.__odTwitchCfg.autoTheater) return;
@@ -379,17 +760,77 @@ export function buildTwitchPowerUpScript(powerUps: PowerUpsConfig): string {
     if (!window.__odTwitchInit) {
       window.__odTwitchInit = true;
       window.__odTwitchEmoteMap = window.__odTwitchEmoteMap || {};
+      let lastRecoverAt = 0;
 
-      // Auto-claim Channel Points chest
+      // Auto-claim Channel Points chest & Auto-Recover from Error #2000/#3000/#5000
       setInterval(() => {
-        if (!window.__odTwitchCfg.autoClaim) return;
-        const btn = document.querySelector(
-          'button[aria-label*="Claim Bonus" i], .community-points-summary button:has(.claimable-bonus__icon)'
-        );
-        if (btn && typeof btn.click === 'function') {
-          try { btn.click(); } catch {}
+        if (window.__odTwitchCfg.autoClaim) {
+          const btn = document.querySelector(
+            'button[aria-label*="Claim Bonus" i], .community-points-summary button:has(.claimable-bonus__icon)'
+          );
+          if (btn && typeof btn.click === 'function') {
+            try { btn.click(); } catch {}
+          }
         }
-      }, 4500);
+        if (window.__odTwitchCfg.autoRecover && Date.now() - lastRecoverAt > 12000) {
+          const errOverlay = document.querySelector('[data-a-target="player-overlay-content-gate"], .content-overlay-gate');
+          const txt = errOverlay ? (errOverlay.textContent || '') : '';
+          if (txt.includes('#2000') || txt.includes('#3000') || txt.includes('#5000') || txt.toLowerCase().includes('network error')) {
+            const retryBtn = errOverlay.querySelector('button');
+            if (retryBtn) {
+              lastRecoverAt = Date.now();
+              try { retryBtn.click(); } catch {}
+            }
+          }
+        }
+      }, 4000);
+
+      // Tab-autocomplete for 7TV / BTTV / FFZ emotes in Twitch chat input
+      let tabMatches = [];
+      let tabIdx = 0;
+      let tabPrefix = '';
+      document.addEventListener('keydown', (ev) => {
+        if (!window.__odTwitchCfg.emotes || ev.key !== 'Tab') return;
+        const el = document.activeElement;
+        if (!el) return;
+        const isChat = Boolean(
+          (el.getAttribute && el.getAttribute('data-a-target') === 'chat-input') ||
+          (el.closest && el.closest('[data-a-target="chat-input"]'))
+        );
+        if (!isChat) return;
+        const emotes = window.__odTwitchEmoteMap;
+        const names = emotes ? Object.keys(emotes) : [];
+        if (names.length === 0) return;
+
+        const isEditable = Boolean(el.isContentEditable);
+        const text = isEditable ? (el.textContent || '') : (el.value || '');
+        const words = text.trimEnd().split(' ');
+        const lastWord = words[words.length - 1] || '';
+        if (lastWord.length < 2) return;
+
+        const lower = lastWord.toLowerCase();
+        if (tabMatches.length === 0 || !tabMatches.includes(lastWord)) {
+          tabPrefix = lower;
+          tabMatches = names.filter((n) => n.toLowerCase().startsWith(tabPrefix)).slice(0, 12);
+          tabIdx = 0;
+        } else {
+          tabIdx = (tabIdx + 1) % tabMatches.length;
+        }
+        if (tabMatches.length === 0) return;
+
+        ev.preventDefault();
+        ev.stopPropagation();
+        const chosen = tabMatches[tabIdx];
+        words[words.length - 1] = chosen;
+        const nextVal = words.join(' ') + ' ';
+        if (isEditable) {
+          el.textContent = nextVal;
+          el.dispatchEvent(new InputEvent('input', { bubbles: true, data: nextVal }));
+        } else {
+          el.value = nextVal;
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+      }, true);
 
       // Pause Chat on Hover (scroll-lock helper)
       const bindHoverPause = () => {
@@ -488,37 +929,168 @@ export function buildTwitchEmotesInjector(emoteMap: Record<string, string>): str
 }
 
 /**
- * Injected Reddit RES-Lite runtime:
+ * Injected Modern RES runtime for Shreddit & Old Reddit:
  * - J/K next & previous post focus, X expand/collapse media, C open comments
  * - Auto-collapse AutoModerator / pinned mod boilerplate
- * - Hide promoted posts
+ * - Hide promoted posts, Games on Reddit, Trending & "Because you visited" recommendations
+ * - Keyword & subreddit feed filter (filteReddit)
+ * - Floating "Jump to Next Top-Level Comment" button
+ * - Local color-coded User Tagger (persisted in Reddit partition localStorage)
+ * - Hover Image Zoom + Exact Hover Timestamps
  */
 export function buildRedditPowerUpScript(powerUps: PowerUpsConfig): string {
   return `(function () {
     window.__odRedditCfg = {
       keyboardNav: ${Boolean(powerUps.redditKeyboardNav)},
       collapseAutoMod: ${Boolean(powerUps.redditCollapseAutoMod)},
-      hidePromoted: ${Boolean(powerUps.redditHidePromoted)}
+      hidePromoted: ${Boolean(powerUps.redditHidePromoted)},
+      hideRecommended: ${Boolean(powerUps.redditHideRecommended)},
+      nextCommentBtn: ${Boolean(powerUps.redditNextCommentButton)},
+      hoverZoom: ${Boolean(powerUps.redditHoverZoom)},
+      userTagger: ${Boolean(powerUps.redditUserTagger)},
+      filteredKeywords: ${JSON.stringify((powerUps.redditFilteredKeywords ?? []).map((k) => k.toLowerCase()))}
+    };
+
+    const TAG_KEY = '__omnideck_reddit_user_tags';
+    const TAG_COLORS = ['#E87A3E', '#3ECF8E', '#60A5FA', '#F59E0B', '#EC4899', '#A78BFA'];
+    const loadTags = () => {
+      try { return JSON.parse(localStorage.getItem(TAG_KEY) || '{}') || {}; } catch { return {}; }
+    };
+    const saveTags = (map) => {
+      try { localStorage.setItem(TAG_KEY, JSON.stringify(map)); } catch {}
     };
 
     const runCleanups = () => {
-      if (window.__odRedditCfg.collapseAutoMod) {
-        // Modern Reddit
+      const cfg = window.__odRedditCfg;
+      if (cfg.collapseAutoMod) {
         document.querySelectorAll('shreddit-comment[author="AutoModerator"]:not([data-od-collapsed])').forEach((el) => {
           el.setAttribute('data-od-collapsed', '1');
           el.setAttribute('collapsed', '');
         });
-        // Old Reddit
         document.querySelectorAll('.thing.comment[data-author="AutoModerator"]:not(.collapsed):not([data-od-collapsed])').forEach((el) => {
           el.setAttribute('data-od-collapsed', '1');
           const expand = el.querySelector('.expand');
           if (expand && typeof expand.click === 'function') expand.click();
         });
       }
-      if (window.__odRedditCfg.hidePromoted) {
+      if (cfg.hidePromoted) {
         document.querySelectorAll('shreddit-ad-post, .promotedlink').forEach((el) => {
           el.style.display = 'none';
         });
+      }
+
+      // Hide "Games on Reddit", Trending, & "Because you visited" / recommended feed injections
+      if (cfg.hideRecommended) {
+        document.querySelectorAll('reddit-recent-pages, [id*="games-on-reddit"], left-nav-games-section, shreddit-feed-carousel').forEach((el) => {
+          el.style.display = 'none';
+        });
+        document.querySelectorAll('shreddit-post').forEach((post) => {
+          const reason = (post.getAttribute('recommendation-source') || '').trim();
+          const prev = post.previousElementSibling;
+          const prevTxt = prev ? (prev.textContent || '').toLowerCase() : '';
+          if (reason || prevTxt.includes('because you') || prevTxt.includes('similar to r/') || prevTxt.includes('popular near you')) {
+            post.style.display = 'none';
+            if (prev && prevTxt.length < 90) prev.style.display = 'none';
+          }
+        });
+      }
+
+      // Keyword & Subreddit feed filter (filteReddit)
+      const kws = cfg.filteredKeywords || [];
+      if (kws.length > 0) {
+        document.querySelectorAll('shreddit-post, .thing.link').forEach((post) => {
+          const title = (post.getAttribute('post-title') || post.querySelector('a.title, [slot="title"]')?.textContent || '').toLowerCase();
+          const sub = (post.getAttribute('subreddit-prefixed-name') || post.getAttribute('data-subreddit-prefixed') || '').toLowerCase();
+          const hit = kws.some((kw) => kw && (title.includes(kw) || sub.includes(kw)));
+          if (hit) post.style.display = 'none';
+        });
+      }
+
+      // Exact localized hover timestamps
+      document.querySelectorAll('time[datetime]:not([data-od-ts])').forEach((el) => {
+        el.setAttribute('data-od-ts', '1');
+        const dt = el.getAttribute('datetime');
+        if (dt) {
+          const d = new Date(dt);
+          if (!isNaN(d.getTime())) el.title = d.toLocaleString();
+        }
+      });
+
+      // Local User Tagger pills next to u/username links
+      if (cfg.userTagger) {
+        const tags = loadTags();
+        document.querySelectorAll('a[href*="/user/"]:not([data-od-tagged]), a.author:not([data-od-tagged])').forEach((a) => {
+          const href = a.getAttribute('href') || '';
+          const m = href.match(/\\/user\\/([A-Za-z0-9_-]+)/);
+          const user = (m && m[1]) || (a.textContent || '').replace(/^u\\//, '').trim();
+          if (!user || user === 'AutoModerator' || user.length > 28) return;
+          a.setAttribute('data-od-tagged', user.toLowerCase());
+          const pill = document.createElement('button');
+          pill.type = 'button';
+          pill.setAttribute('data-od-user-pill', user.toLowerCase());
+          const renderPill = (entry) => {
+            if (entry && entry.tag) {
+              pill.textContent = entry.tag;
+              pill.style.cssText = 'margin-left:5px;padding:1px 6px;border-radius:999px;border:none;background:' + (entry.color || '#E87A3E') + ';color:#fff;font:700 10px/1.3 system-ui,sans-serif;cursor:pointer;vertical-align:middle;';
+              pill.title = 'Click to edit or clear tag for u/' + user;
+            } else {
+              pill.textContent = '+';
+              pill.style.cssText = 'margin-left:4px;padding:0 4px;border-radius:4px;border:1px solid rgba(150,150,160,0.35);background:transparent;color:inherit;opacity:0.45;font:700 10px/1.2 system-ui,sans-serif;cursor:pointer;vertical-align:middle;';
+              pill.title = 'Tag u/' + user + ' locally';
+            }
+          };
+          renderPill(tags[user.toLowerCase()]);
+          pill.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            const curMap = loadTags();
+            const existing = curMap[user.toLowerCase()];
+            const nextText = window.prompt('Local tag for u/' + user + ' (leave empty to remove):', existing?.tag || '');
+            if (nextText === null) return;
+            const trimmed = nextText.trim().slice(0, 32);
+            if (!trimmed) {
+              delete curMap[user.toLowerCase()];
+            } else {
+              const color = existing?.color || TAG_COLORS[Object.keys(curMap).length % TAG_COLORS.length];
+              curMap[user.toLowerCase()] = { tag: trimmed, color };
+            }
+            saveTags(curMap);
+            document.querySelectorAll('[data-od-user-pill="' + user.toLowerCase() + '"]').forEach((p) => {
+              const e = curMap[user.toLowerCase()];
+              if (e && e.tag) {
+                p.textContent = e.tag;
+                p.style.cssText = 'margin-left:5px;padding:1px 6px;border-radius:999px;border:none;background:' + e.color + ';color:#fff;font:700 10px/1.3 system-ui,sans-serif;cursor:pointer;vertical-align:middle;';
+              } else {
+                p.textContent = '+';
+                p.style.cssText = 'margin-left:4px;padding:0 4px;border-radius:4px;border:1px solid rgba(150,150,160,0.35);background:transparent;color:inherit;opacity:0.45;font:700 10px/1.2 system-ui,sans-serif;cursor:pointer;vertical-align:middle;';
+              }
+            });
+          });
+          if (a.parentElement) a.insertAdjacentElement('afterend', pill);
+        });
+      }
+
+      // Floating "Jump to Next Top-Level Comment" button
+      const isComments = location.pathname.includes('/comments/');
+      let jumpBtn = document.getElementById('__od_reddit_next_cmt');
+      if (cfg.nextCommentBtn && isComments) {
+        if (!jumpBtn && document.body) {
+          jumpBtn = document.createElement('button');
+          jumpBtn.id = '__od_reddit_next_cmt';
+          jumpBtn.type = 'button';
+          jumpBtn.title = 'Jump to next top-level comment';
+          jumpBtn.textContent = '↓';
+          jumpBtn.style.cssText = 'position:fixed;right:20px;bottom:24px;z-index:2147483640;width:38px;height:38px;border-radius:999px;border:1px solid rgba(255,255,255,0.2);background:rgba(20,20,24,0.9);color:#fff;font:700 17px system-ui,sans-serif;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;';
+          jumpBtn.onclick = () => {
+            const roots = Array.from(document.querySelectorAll('shreddit-comment[depth="0"], .sitetable.nestedlisting > .thing.comment'));
+            const next = roots.find((el) => el.getBoundingClientRect().top > 85);
+            if (next) next.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          };
+          document.body.appendChild(jumpBtn);
+        }
+        if (jumpBtn) jumpBtn.style.display = 'flex';
+      } else if (jumpBtn) {
+        jumpBtn.style.display = 'none';
       }
     };
 
@@ -527,6 +1099,33 @@ export function buildRedditPowerUpScript(powerUps: PowerUpsConfig): string {
     if (!window.__odRedditInit) {
       window.__odRedditInit = true;
       let focusIdx = -1;
+
+      // Hover Image Zoom preview card
+      let zoomBox = null;
+      const hideZoom = () => { if (zoomBox) zoomBox.style.display = 'none'; };
+      document.addEventListener('mouseover', (ev) => {
+        if (!window.__odRedditCfg.hoverZoom) return;
+        const img = ev.target && ev.target.closest ? ev.target.closest('shreddit-post img, a.thumbnail img') : null;
+        if (!img || !img.src || img.width > 380) return;
+        const src = img.src;
+        if (!src.includes('redd.it') && !src.includes('redditmedia.com') && !src.includes('imgur.com')) return;
+        if (!zoomBox && document.body) {
+          zoomBox = document.createElement('div');
+          zoomBox.id = '__od_reddit_hover_zoom';
+          zoomBox.style.cssText = 'position:fixed;right:18px;bottom:72px;z-index:2147483645;max-width:48vw;max-height:68vh;padding:4px;border-radius:10px;background:rgba(12,12,16,0.94);border:1px solid rgba(255,255,255,0.18);box-shadow:0 16px 40px rgba(0,0,0,0.65);pointer-events:none;display:none;';
+          const zImg = document.createElement('img');
+          zImg.style.cssText = 'display:block;max-width:46vw;max-height:64vh;object-fit:contain;border-radius:6px;';
+          zoomBox.appendChild(zImg);
+          document.body.appendChild(zoomBox);
+        }
+        if (zoomBox && zoomBox.firstChild) {
+          zoomBox.firstChild.src = src;
+          zoomBox.style.display = 'block';
+        }
+      }, true);
+      document.addEventListener('mouseout', (ev) => {
+        if (ev.target && ev.target.tagName === 'IMG') hideZoom();
+      }, true);
 
       const getPosts = () =>
         Array.from(document.querySelectorAll('shreddit-post, .thing.link:not(.promotedlink)')).filter(
@@ -546,57 +1145,36 @@ export function buildRedditPowerUpScript(powerUps: PowerUpsConfig): string {
 
       const isTypingOrModal = (ev) => {
         const p = (location.pathname || '').toLowerCase();
-        if (
-          p.startsWith('/login') ||
-          p.startsWith('/register') ||
-          p.startsWith('/account') ||
-          p.startsWith('/submit')
-        ) {
+        if (p.startsWith('/login') || p.startsWith('/register') || p.startsWith('/account') || p.startsWith('/submit')) {
           return true;
         }
-
         const isEditableNode = (el) => {
           if (!el || typeof el !== 'object') return false;
           const tag = (el.tagName || '').toLowerCase();
           if (
-            tag === 'input' ||
-            tag === 'textarea' ||
-            tag === 'select' ||
-            tag.includes('input') ||
-            tag.includes('composer') ||
-            tag.includes('search') ||
+            tag === 'input' || tag === 'textarea' || tag === 'select' ||
+            tag.includes('input') || tag.includes('composer') || tag.includes('search') ||
             tag.startsWith('auth-flow')
-          ) {
-            return true;
-          }
+          ) return true;
           if (el.isContentEditable) return true;
           if (typeof el.getAttribute === 'function') {
             const role = (el.getAttribute('role') || '').toLowerCase();
-            if (role === 'textbox' || role === 'searchbox' || role === 'combobox' || role === 'dialog') {
-              return true;
-            }
+            if (role === 'textbox' || role === 'searchbox' || role === 'combobox' || role === 'dialog') return true;
           }
           return false;
         };
-
-        // Pierce Shadow DOM (Reddit uses <faceplate-text-input> with an inner shadow <input>)
         if (typeof ev.composedPath === 'function') {
           const path = ev.composedPath();
           for (let i = 0; i < path.length; i++) {
             if (isEditableNode(path[i])) return true;
           }
         }
-
         let active = document.activeElement;
         while (active) {
           if (isEditableNode(active)) return true;
           active = active.shadowRoot ? active.shadowRoot.activeElement : null;
         }
-
-        if (document.querySelector('auth-flow-modal, faceplate-modal[open], dialog[open]')) {
-          return true;
-        }
-
+        if (document.querySelector('auth-flow-modal, faceplate-modal[open], dialog[open]')) return true;
         return isEditableNode(ev.target);
       };
 
@@ -634,7 +1212,6 @@ export function buildRedditPowerUpScript(powerUps: PowerUpsConfig): string {
         }
       });
 
-      // Rescue Reddit's logged-out blocking modal loop ("I already have an account" closing & reopening)
       document.addEventListener('click', (ev) => {
         try {
           const target = ev.target && ev.target.closest ? ev.target.closest('button, a') : null;
@@ -660,7 +1237,153 @@ export function buildRedditPowerUpScript(powerUps: PowerUpsConfig): string {
         } catch {}
       }, true);
 
-      setInterval(runCleanups, 2500);
+      setInterval(runCleanups, 2200);
+    }
+  })();`;
+}
+
+/**
+ * Injected Spotify Web Player Power-Up runtime:
+ * - Music-Only Mode: hides Podcasts, Episodes, and Audiobooks carousels/shelves & sidebar chips
+ * - Live Queue Total Duration badge in the Queue view
+ */
+export function buildSpotifyPowerUpScript(powerUps: PowerUpsConfig): string {
+  return `(function () {
+    window.__odSpotifyCfg = {
+      hidePodcastsAudiobooks: ${Boolean(powerUps.spotifyHidePodcastsAudiobooks)}
+    };
+
+    const runSpotifyCleanups = () => {
+      if (window.__odSpotifyCfg.hidePodcastsAudiobooks) {
+        document.querySelectorAll('section[data-testid="component-shelf"], section[aria-label]').forEach((sec) => {
+          const label = (sec.getAttribute('aria-label') || sec.querySelector('h2, a')?.textContent || '').toLowerCase();
+          const hasPodcastLinks = Boolean(sec.querySelector('a[href*="/show/"], a[href*="/episode/"], a[href*="/audiobook/"]'));
+          if (
+            label.includes('podcast') ||
+            label.includes('audiobook') ||
+            label.includes('episodes for you') ||
+            label.includes('your shows') ||
+            hasPodcastLinks
+          ) {
+            sec.style.display = 'none';
+          }
+        });
+        document.querySelectorAll('[role="checkbox"], button').forEach((chip) => {
+          const txt = (chip.textContent || '').trim().toLowerCase();
+          if (txt === 'podcasts' || txt === 'audiobooks' || txt === 'podcasts & shows') {
+            chip.style.display = 'none';
+          }
+        });
+      }
+
+      // Queue Total Duration readout
+      if (location.pathname.startsWith('/queue')) {
+        const rows = document.querySelectorAll('[data-testid="tracklist-row"]');
+        let totalSec = 0;
+        rows.forEach((row) => {
+          const durEl = row.querySelector('[aria-colindex="5"], [data-testid="tracklist-row"] > div:last-child');
+          const txt = (durEl?.textContent || '').trim();
+          const m = txt.match(/(\\d+):(\\d{2})/);
+          if (m) totalSec += parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+        });
+        const heading = document.querySelector('main h1');
+        if (heading && totalSec > 0) {
+          let badge = document.getElementById('__od_sp_queue_dur');
+          if (!badge) {
+            badge = document.createElement('span');
+            badge.id = '__od_sp_queue_dur';
+            badge.style.cssText = 'margin-left:12px;font:600 13px system-ui,sans-serif;color:#1DB954;vertical-align:middle;';
+            heading.appendChild(badge);
+          }
+          const h = Math.floor(totalSec / 3600);
+          const mins = Math.floor((totalSec % 3600) / 60);
+          badge.textContent = rows.length + ' tracks · ' + (h > 0 ? (h + 'h ' + mins + 'm') : (mins + 'm'));
+        }
+      }
+    };
+
+    runSpotifyCleanups();
+    if (!window.__odSpotifyInit) {
+      window.__odSpotifyInit = true;
+      setInterval(runSpotifyCleanups, 2500);
+    }
+  })();`;
+}
+
+/**
+ * Injected Audible Player-First Power-Up runtime:
+ * - Precision Speed pill (0.75x - 3.0x in 0.05x steps, remembered per book) inside Audible Cloud Player
+ * - Hide storefront banner ads & upsell carousels on Library / Wishlist pages
+ */
+export function buildAudiblePowerUpScript(powerUps: PowerUpsConfig): string {
+  return `(function () {
+    window.__odAudibleCfg = {
+      precisionSpeed: ${Boolean(powerUps.audiblePrecisionSpeed)},
+      hideStoreClutter: ${Boolean(powerUps.audibleHideStoreClutter)}
+    };
+
+    const syncAudible = () => {
+      if (window.__odAudibleCfg.hideStoreClutter) {
+        let st = document.getElementById('__od_audible_clutter_css');
+        if (!st) {
+          st = document.createElement('style');
+          st.id = '__od_audible_clutter_css';
+          (document.head || document.documentElement).appendChild(st);
+        }
+        st.textContent = [
+          '[data-widget="adbl-merchandising-banner"], .adbl-upsell-banner, #adbl-store-upsell,',
+          '[data-automation-id*="upsell"], .bc-section:has(a[href*="/ep/audible-plus"]) { display: none !important; }'
+        ].join('\\n');
+      }
+
+      if (window.__odAudibleCfg.precisionSpeed && location.pathname.toLowerCase().includes('webplayer')) {
+        if (!document.getElementById('__od_audible_speed_pill') && document.body) {
+          const SPEED_STORE = '__omnideck_audible_speed_' + (location.search || 'default');
+          let curSpeed = 1.0;
+          try {
+            const saved = Number(localStorage.getItem(SPEED_STORE));
+            if (Number.isFinite(saved) && saved >= 0.75 && saved <= 3.0) curSpeed = saved;
+          } catch {}
+
+          const applySpeed = (val) => {
+            curSpeed = Math.min(3.0, Math.max(0.75, Math.round(val * 20) / 20));
+            try { localStorage.setItem(SPEED_STORE, String(curSpeed)); } catch {}
+            document.querySelectorAll('audio, video').forEach((m) => {
+              try { m.playbackRate = curSpeed; } catch {}
+            });
+            valEl.textContent = curSpeed.toFixed(2) + 'x';
+          };
+
+          const pill = document.createElement('div');
+          pill.id = '__od_audible_speed_pill';
+          pill.style.cssText = 'position:fixed;bottom:14px;left:14px;z-index:2147483640;display:flex;align-items:center;gap:4px;padding:4px 8px;border-radius:999px;background:rgba(18,16,14,0.92);border:1px solid rgba(247,153,28,0.45);color:#fff;font:600 11px system-ui,sans-serif;box-shadow:0 6px 18px rgba(0,0,0,0.45);';
+
+          const mkBtn = (txt, fn) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.textContent = txt;
+            b.style.cssText = 'border:none;background:rgba(255,255,255,0.12);color:#fff;border-radius:6px;padding:2px 6px;cursor:pointer;font:700 11px system-ui,sans-serif;';
+            b.onclick = fn;
+            return b;
+          };
+          const valEl = document.createElement('span');
+          valEl.style.cssText = 'min-width:38px;text-align:center;color:#F7991C;';
+          valEl.textContent = curSpeed.toFixed(2) + 'x';
+
+          pill.appendChild(mkBtn('-0.05', () => applySpeed(curSpeed - 0.05)));
+          pill.appendChild(valEl);
+          pill.appendChild(mkBtn('+0.05', () => applySpeed(curSpeed + 0.05)));
+          pill.appendChild(mkBtn('1x', () => applySpeed(1.0)));
+          document.body.appendChild(pill);
+          setTimeout(() => applySpeed(curSpeed), 1200);
+        }
+      }
+    };
+
+    syncAudible();
+    if (!window.__odAudibleInit) {
+      window.__odAudibleInit = true;
+      setInterval(syncAudible, 3000);
     }
   })();`;
 }

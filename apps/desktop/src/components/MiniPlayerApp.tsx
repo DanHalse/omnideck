@@ -3,12 +3,14 @@ import type { DesktopSnapshot } from '@omnideck/shared';
 import { getOmniDeckApi } from '../api';
 import { ServiceIcon } from './ServiceIcon';
 import {
+  BanIcon,
   CloseIcon,
   ExpandStageIcon,
   PauseIcon,
   PlayIcon,
   SkipBackIcon,
   SkipForwardIcon,
+  SwapIcon,
   ThumbDownIcon,
   ThumbUpIcon,
 } from './Icons';
@@ -41,6 +43,9 @@ export function MiniPlayerApp() {
     ? snapshot?.config.services.find((s) => s.id === np.serviceId)
     : undefined;
   const showThumbs = np?.serviceId === 'youtube-music' || np?.serviceId === 'youtube';
+  const isMusicService = np?.serviceId === 'youtube-music' || np?.serviceId === 'spotify';
+  const bridgeTargetId = np?.serviceId === 'spotify' ? 'youtube-music' : 'spotify';
+  const bridgeTargetLabel = bridgeTargetId === 'spotify' ? 'Spotify' : 'YouTube Music';
   const isLiked = np?.likeStatus === 'like';
   const isDisliked = np?.likeStatus === 'dislike';
 
@@ -68,6 +73,40 @@ export function MiniPlayerApp() {
               </div>
             </div>
             <div className="mini-hud__win-actions">
+              {isMusicService && np?.title && (
+                <>
+                  <button
+                    type="button"
+                    className="icon-btn icon-btn--sm"
+                    title={`Open this song in ${bridgeTargetLabel}`}
+                    onClick={() => {
+                      const q = np.artist ? `${np.artist} ${np.title}` : np.title;
+                      void api.searchInService(bridgeTargetId, q);
+                      void api.focusMainWindow();
+                    }}
+                  >
+                    <SwapIcon size={11} />
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-btn icon-btn--sm"
+                    title={
+                      np.artist && np.artist !== svc?.name
+                        ? `Block artist "${np.artist}" (auto-skip forever)`
+                        : `Block song "${np.title}" (auto-skip forever)`
+                    }
+                    onClick={() => {
+                      if (np.artist && np.artist !== svc?.name) {
+                        void api.blockMusic({ kind: 'artist', value: np.artist });
+                      } else {
+                        void api.blockMusic({ kind: 'track', value: np.title, artist: np.artist });
+                      }
+                    }}
+                  >
+                    <BanIcon size={11} />
+                  </button>
+                </>
+              )}
               <button
                 type="button"
                 className="icon-btn icon-btn--sm"

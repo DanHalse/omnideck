@@ -95,29 +95,73 @@ export interface PowerUpsConfig {
   youtubeHideShorts: boolean;
   youtubeAutoDismissStillListening: boolean;
   youtubeRememberSpeedQuality: boolean;
+  youtubeForceOriginalAudio: boolean;
+  youtubeReturnDislikes: boolean;
+  youtubeDeArrow: boolean;
+  youtubeHideEndScreens: boolean;
+  youtubeDisableHoverPreview: boolean;
+  youtubePlayerControls: boolean;
+  ytmAudioOnlyMode: boolean;
+  ytmPlaylistQuickFilter: boolean;
 
   // Twitch
   twitchThirdPartyEmotes: boolean;
   twitchAutoClaimPoints: boolean;
   twitchAutoTheater: boolean;
   twitchPauseChatOnHover: boolean;
+  twitchAutoRecover: boolean;
+  twitchHideClutter: boolean;
 
   // Audible
   audibleDirectToLibrary: boolean;
   audibleDockCloudPlayer: boolean;
   audibleFadeSleepAndRewind: boolean;
   audibleWhisperSyncFlush: boolean;
+  audiblePrecisionSpeed: boolean;
+  audibleHideStoreClutter: boolean;
 
-  // Reddit (RES-Lite)
+  // Reddit (Modern RES)
   redditCompactDensity: boolean;
   redditUseOldReddit: boolean;
   redditKeyboardNav: boolean;
   redditCollapseAutoMod: boolean;
   redditHidePromoted: boolean;
+  redditHideRecommended: boolean;
+  redditNextCommentButton: boolean;
+  redditHoverZoom: boolean;
+  redditUserTagger: boolean;
+  redditFilteredKeywords: string[];
 
   // Spotify
   spotifyKeepConnectAlive: boolean;
   spotifyLikeShortcut: string;
+  spotifyHidePodcastsAudiobooks: boolean;
+}
+
+export interface BlockedMusicEntry {
+  id: string;
+  kind: 'artist' | 'track';
+  value: string;
+  artist?: string;
+  addedAt: number;
+}
+
+export interface BookNoteEntry {
+  id: string;
+  bookTitle: string;
+  timestampLabel: string;
+  note: string;
+  url?: string;
+  createdAt: number;
+}
+
+export interface IntegrationsConfig {
+  discordRpcEnabled: boolean;
+  discordClientId: string;
+  listenBrainzToken: string;
+  lastFmApiKey: string;
+  lastFmApiSecret: string;
+  lastFmSessionKey: string;
 }
 
 export type AudioFocusMode = 'off' | 'pause' | 'duck';
@@ -138,6 +182,10 @@ export interface EqualizerConfig {
   preampDb: number;
   /** 10-band gains in dB [-12, +12] at 32, 64, 125, 250, 500, 1k, 2k, 4k, 8k, 16k Hz. */
   bands: number[];
+  /** Live FFZ-style Web Audio DynamicsCompressorNode loudness leveler. */
+  compressorEnabled: boolean;
+  /** Output volume booster multiplier [1.0, 2.0] (100% - 200%). */
+  volumeBoost: number;
 }
 
 export type AiProviderId = 'none' | 'gemini' | 'openai' | 'anthropic' | 'ollama';
@@ -201,6 +249,8 @@ export interface ArtistDossier {
   aiEnriched: boolean;
   aiProvider?: AiProviderId;
   sources: string[];
+  verificationStatus?: 'verified' | 'unverified';
+  verificationHint?: string;
 }
 
 export interface AiAskResponse {
@@ -294,6 +344,12 @@ export interface AppSettings {
   equalizer: EqualizerConfig;
   /** Optional BYOK or local Ollama AI provider for Music Discovery & Now Playing Hub. */
   aiCompanion: AiCompanionConfig;
+  /** Universal artist/track auto-skip blocklist ("Trashbin") across YouTube Music & Spotify. */
+  blockedMusic: BlockedMusicEntry[];
+  /** Local timestamped notes & quotes for Audible audiobooks. */
+  bookNotes: BookNoteEntry[];
+  /** Optional Discord Rich Presence, ListenBrainz, and Last.fm scrobbling integrations. */
+  integrations: IntegrationsConfig;
 }
 
 export interface PersistedConfig {
