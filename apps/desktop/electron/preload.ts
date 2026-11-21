@@ -55,6 +55,8 @@ const api: OmniDeckBridge = {
   mediaPlayPause: (serviceId) => ipcRenderer.invoke('omnideck:media-play-pause', serviceId),
   mediaNext: (serviceId) => ipcRenderer.invoke('omnideck:media-next', serviceId),
   mediaPrevious: (serviceId) => ipcRenderer.invoke('omnideck:media-previous', serviceId),
+  mediaSeek: (targetTimeSec, serviceId) =>
+    ipcRenderer.invoke('omnideck:media-seek', targetTimeSec, serviceId),
   mediaLikeTrack: (serviceId) => ipcRenderer.invoke('omnideck:media-like', serviceId),
   mediaDislikeTrack: (serviceId) => ipcRenderer.invoke('omnideck:media-dislike', serviceId),
   resumeAutoPaused: () => ipcRenderer.invoke('omnideck:resume-auto-paused'),

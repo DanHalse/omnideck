@@ -17,13 +17,32 @@ import {
   VolumeOffIcon,
 } from './Icons';
 
+function formatSec(sec?: number): string {
+  if (typeof sec !== 'number' || !Number.isFinite(sec) || sec < 0) return '0:00';
+  const total = Math.floor(sec);
+  const hrs = Math.floor(total / 3600);
+  const mins = Math.floor((total % 3600) / 60);
+  const rem = total % 60;
+  if (hrs > 0) {
+    return `${hrs}:${mins.toString().padStart(2, '0')}:${rem.toString().padStart(2, '0')}`;
+  }
+  return `${mins}:${rem.toString().padStart(2, '0')}`;
+}
+
 export function MiniPlayerApp() {
   const api = useMemo(() => getOmniDeckApi(), []);
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
   const [dragVolume, setDragVolume] = useState<number | null>(null);
+  const [dragSeekSec, setDragSeekSec] = useState<number | null>(null);
+  const [clockTick, setClockTick] = useState(0);
+
   const lastSentAtRef = useRef(0);
   const pendingVolRef = useRef<{ serviceId: string; volume: number } | null>(null);
   const flushTimerRef = useRef<number | null>(null);
+
+  const lastSeekSentAtRef = useRef(0);
+  const pendingSeekRef = useRef<{ serviceId?: string; timeSec: number } | null>(null);
+  const seekFlushTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -39,6 +58,9 @@ export function MiniPlayerApp() {
       if (flushTimerRef.current !== null) {
         window.clearTimeout(flushTimerRef.current);
       }
+      if (seekFlushTimerRef.current !== null) {
+        window.clearTimeout(seekFlushTimerRef.current);
+      }
     };
   }, [api]);
 
@@ -48,6 +70,14 @@ export function MiniPlayerApp() {
   }, [snapshot?.config.settings.theme]);
 
   const np = snapshot?.nowPlaying;
+
+  // Smooth 250ms local clock tick while playing so song progress bar & timer advance fluidly
+  useEffect(() => {
+    if (!np?.playing || typeof np?.currentTimeSec !== 'number') return;
+    const timer = window.setInterval(() => setClockTick((t) => (t + 1) % 10000), 250);
+    return () => window.clearInterval(timer);
+  }, [np?.playing, np?.currentTimeSec, np?.playbackSyncedAt]);
+
   const svc = np?.serviceId
     ? snapshot?.config.services.find((s) => s.id === np.serviceId)
     : undefined;
@@ -67,6 +97,25 @@ export function MiniPlayerApp() {
         : 1.0;
   const effectiveVolume = dragVolume !== null ? dragVolume : isMuted ? 0 : liveVolume;
   const volumePct = Math.round(Math.min(1, Math.max(0, effectiveVolume)) * 100);
+
+  const durationSec =
+    typeof np?.durationSec === 'number' && Number.isFinite(np.durationSec) && np.durationSec > 0
+      ? np.durationSec
+      : 0;
+
+  const interpolatedTimeSec = useMemo(() => {
+    if (typeof np?.currentTimeSec !== 'number' || !Number.isFinite(np.currentTimeSec)) return 0;
+    if (!np.playing || typeof np.playbackSyncedAt !== 'number') {
+      return Math.max(0, np.currentTimeSec);
+    }
+    const elapsed = Math.min(2.5, Math.max(0, (Date.now() - np.playbackSyncedAt) / 1000));
+    const next = Math.max(0, np.currentTimeSec + elapsed);
+    return durationSec > 0 ? Math.min(durationSec, next) : next;
+  }, [np?.currentTimeSec, np?.playing, np?.playbackSyncedAt, durationSec, clockTick]);
+
+  const effectiveSeekSec = dragSeekSec !== null ? dragSeekSec : interpolatedTimeSec;
+  const seekPct =
+    durationSec > 0 ? Math.min(100, Math.max(0, (effectiveSeekSec / durationSec) * 100)) : 0;
 
   const sendVolumeThrottled = (serviceId: string, nextVol: number, immediate = false) => {
     const clamped = Math.min(1, Math.max(0, Math.round(nextVol * 100) / 100));
@@ -92,6 +141,34 @@ export function MiniPlayerApp() {
           void api.setVolume(pending.serviceId, pending.volume);
         }
       }, 45);
+    }
+  };
+
+  const sendSeekThrottled = (timeSec: number, immediate = false) => {
+    const serviceId = np?.serviceId ?? undefined;
+    const clamped = Math.max(0, durationSec > 0 ? Math.min(durationSec, timeSec) : timeSec);
+    const now = Date.now();
+    if (immediate || now - lastSeekSentAtRef.current >= 120) {
+      if (seekFlushTimerRef.current !== null) {
+        window.clearTimeout(seekFlushTimerRef.current);
+        seekFlushTimerRef.current = null;
+      }
+      pendingSeekRef.current = null;
+      lastSeekSentAtRef.current = now;
+      void api.mediaSeek(clamped, serviceId);
+      return;
+    }
+    pendingSeekRef.current = { serviceId, timeSec: clamped };
+    if (seekFlushTimerRef.current === null) {
+      seekFlushTimerRef.current = window.setTimeout(() => {
+        seekFlushTimerRef.current = null;
+        const pending = pendingSeekRef.current;
+        pendingSeekRef.current = null;
+        if (pending) {
+          lastSeekSentAtRef.current = Date.now();
+          void api.mediaSeek(pending.timeSec, pending.serviceId);
+        }
+      }, 120);
     }
   };
 
@@ -296,9 +373,54 @@ export function MiniPlayerApp() {
               </span>
             </div>
           )}
+
+          <div
+            className={`mini-hud__seek ${durationSec <= 0 ? 'mini-hud__seek--disabled' : ''}`}
+            title={
+              durationSec > 0
+                ? `Seek track (${formatSec(effectiveSeekSec)} / ${formatSec(durationSec)}) — drag or click`
+                : 'Track progress'
+            }
+          >
+            <span className="mini-hud__seek-time">{formatSec(effectiveSeekSec)}</span>
+            <input
+              type="range"
+              className="mini-hud__seek-slider"
+              min={0}
+              max={durationSec > 0 ? Math.ceil(durationSec) : 100}
+              step={0.5}
+              disabled={durationSec <= 0}
+              value={durationSec > 0 ? Math.min(durationSec, effectiveSeekSec) : 0}
+              aria-label="Seek track position"
+              style={{ '--seek-pct': `${seekPct.toFixed(1)}%` } as CSSProperties}
+              onChange={(e) => {
+                if (durationSec <= 0) return;
+                const next = Number(e.target.value);
+                setDragSeekSec(next);
+                sendSeekThrottled(next, false);
+              }}
+              onPointerUp={(e) => {
+                if (durationSec <= 0) return;
+                const next = Number(e.currentTarget.value);
+                sendSeekThrottled(next, true);
+                setDragSeekSec(null);
+              }}
+              onKeyUp={(e) => {
+                if (durationSec <= 0) return;
+                const next = Number(e.currentTarget.value);
+                sendSeekThrottled(next, true);
+                setDragSeekSec(null);
+              }}
+              onBlur={() => setDragSeekSec(null)}
+            />
+            <span className="mini-hud__seek-time mini-hud__seek-time--end">
+              {durationSec > 0 ? formatSec(durationSec) : '--:--'}
+            </span>
+          </div>
         </div>
       </div>
     </div>
   );
 }
+
 

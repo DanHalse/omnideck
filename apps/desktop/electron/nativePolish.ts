@@ -288,6 +288,35 @@ export const READ_MEDIA_METADATA_SCRIPT = `(function () {
           const dislikePressed = dislikeBtn && (dislikeBtn.getAttribute('aria-pressed') === 'true' || /remove dislike/i.test(dislikeBtn.getAttribute('aria-label') || ''));
           if (likePressed) likeStatus = 'like';
           else if (dislikePressed) likeStatus = 'dislike';
+
+          if (typeof durationSec !== 'number' || durationSec <= 0) {
+            const slider = bar.querySelector('#progress-bar');
+            if (slider) {
+              const val = Number(slider.getAttribute('value') || slider.value);
+              const max = Number(slider.getAttribute('aria-valuemax') || slider.getAttribute('max') || slider.max);
+              if (Number.isFinite(val) && val >= 0 && typeof currentTimeSec !== 'number') {
+                currentTimeSec = val;
+              }
+              if (Number.isFinite(max) && max > 0) {
+                durationSec = max;
+              }
+            }
+          }
+        }
+      } else if (host.includes('spotify.com') && (typeof currentTimeSec !== 'number' || typeof durationSec !== 'number')) {
+        const parseClock = (txt) => {
+          if (!txt) return undefined;
+          const parts = txt.trim().split(':').map((n) => parseInt(n, 10));
+          if (parts.some((n) => Number.isNaN(n))) return undefined;
+          return parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2] : parts[0] * 60 + (parts[1] || 0);
+        };
+        const posEl = document.querySelector('[data-testid="playback-position"]');
+        const durEl = document.querySelector('[data-testid="playback-duration"]');
+        if (posEl && typeof currentTimeSec !== 'number') {
+          currentTimeSec = parseClock(posEl.textContent);
+        }
+        if (durEl && typeof durationSec !== 'number') {
+          durationSec = parseClock(durEl.textContent);
         }
       }
     } catch {}

@@ -231,3 +231,65 @@ export function buildMediaControlScript(action: MediaControlAction): string {
     return 'noop';
   })();`;
 }
+
+/**
+ * Generates an injected JavaScript snippet to seek the active media player to an exact
+ * timestamp (in seconds) across YouTube Music, YouTube, Spotify, Audible, and HTML5 media.
+ */
+export function buildSeekMediaScript(targetTimeSec: number): string {
+  const safeSec = Math.max(0, Number.isFinite(targetTimeSec) ? targetTimeSec : 0);
+  return `(function () {
+    try {
+      const target = ${safeSec};
+      const host = (location.hostname || '').toLowerCase();
+      const mainYtVideo =
+        (host.includes('youtube.com') && document.querySelector('video.html5-main-video')) || null;
+      const mediaEls = Array.from(document.querySelectorAll('video, audio'));
+      const activeEl =
+        (mainYtVideo && Number.isFinite(mainYtVideo.duration) && mainYtVideo.duration > 0 ? mainYtVideo : null) ||
+        mediaEls.find((m) => !m.paused && Number.isFinite(m.duration) && m.duration > 0) ||
+        mediaEls.find((m) => Number.isFinite(m.duration) && m.duration > 0 && m.currentTime > 0) ||
+        mediaEls.find((m) => Number.isFinite(m.duration) && m.duration > 0) ||
+        mediaEls[0];
+
+      if (activeEl) {
+        const maxDur =
+          Number.isFinite(activeEl.duration) && activeEl.duration > 0
+            ? activeEl.duration
+            : target;
+        activeEl.currentTime = Math.max(0, Math.min(maxDur, target));
+        return 'seeked-element';
+      }
+
+      if (host.includes('spotify.com')) {
+        const bar = document.querySelector('[data-testid="progress-bar"]');
+        const durEl = document.querySelector('[data-testid="playback-duration"]');
+        if (bar && durEl && durEl.textContent) {
+          const parts = durEl.textContent
+            .trim()
+            .split(':')
+            .map((n) => parseInt(n, 10) || 0);
+          const totalSec =
+            parts.length === 3
+              ? parts[0] * 3600 + parts[1] * 60 + parts[2]
+              : parts[0] * 60 + (parts[1] || 0);
+          if (totalSec > 0) {
+            const rect = bar.getBoundingClientRect();
+            const ratio = Math.max(0, Math.min(1, target / totalSec));
+            const clientX = rect.left + rect.width * ratio;
+            const clientY = rect.top + rect.height / 2;
+            bar.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX, clientY }));
+            bar.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX, clientY }));
+            bar.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX, clientY }));
+            return 'seeked-spotify-bar';
+          }
+        }
+      }
+
+      return 'noop';
+    } catch {
+      return 'error';
+    }
+  })();`;
+}
+

@@ -806,6 +806,11 @@ function registerIpcHandlers(): void {
     await viewManager?.runMediaAction('previous', serviceId);
     keepMiniPlayerOnTop();
   });
+  ipcMain.handle('omnideck:media-seek', async (_e, targetTimeSec: number, serviceId?: string) => {
+    const res = await viewManager?.seekMedia(targetTimeSec, serviceId);
+    keepMiniPlayerOnTop();
+    return res;
+  });
   ipcMain.handle('omnideck:media-like', async (_e, serviceId?: string) => {
     const res = await viewManager?.runMediaAction('like-track', serviceId);
     keepMiniPlayerOnTop();

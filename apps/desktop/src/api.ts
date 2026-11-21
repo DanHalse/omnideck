@@ -327,6 +327,7 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
     },
     mediaNext: async () => {},
     mediaPrevious: async () => {},
+    mediaSeek: async () => commit(),
     mediaLikeTrack: async () => {
       toastMessage = 'Liked current track';
       return commit();

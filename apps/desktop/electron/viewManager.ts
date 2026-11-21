@@ -41,7 +41,7 @@ import {
 import { shouldBlockNetworkRequest } from './adBlocker.js';
 import { buildDuckFactorScript, buildEqualizerScript } from './audioEngine.js';
 import type { ListeningStatsStore } from './listeningStats.js';
-import { buildMediaControlScript, type MediaControlAction } from './mediaScripts.js';
+import { buildMediaControlScript, buildSeekMediaScript, type MediaControlAction } from './mediaScripts.js';
 import {
   buildNativePolishCss,
   buildSetVolumeScript,
@@ -752,6 +752,37 @@ export class ViewManager {
       }
     } catch {
       // Ignore if page is mid-navigation
+    }
+
+    return this.emitSnapshot();
+  }
+
+  async seekMedia(targetTimeSec: number, explicitServiceId?: string): Promise<DesktopSnapshot> {
+    const targetId = explicitServiceId ?? this.resolveMediaTargetId();
+    if (!targetId) return this.getSnapshot();
+
+    const safeTime = Math.max(0, Number.isFinite(targetTimeSec) ? targetTimeSec : 0);
+    const prevMeta = this.mediaMeta.get(targetId);
+    if (prevMeta) {
+      const clamped =
+        typeof prevMeta.durationSec === 'number' && prevMeta.durationSec > 0
+          ? Math.min(prevMeta.durationSec, safeTime)
+          : safeTime;
+      this.mediaMeta.set(targetId, {
+        ...prevMeta,
+        currentTimeSec: clamped,
+        syncedAt: Date.now(),
+      });
+    }
+
+    const wc = this.getMediaWebContents(targetId);
+    if (wc && !wc.isDestroyed()) {
+      try {
+        await wc.executeJavaScript(buildSeekMediaScript(safeTime), true);
+        setTimeout(() => void this.pollMediaMetadata(targetId, true), 180);
+      } catch {
+        // Ignore if page is mid-navigation
+      }
     }
 
     return this.emitSnapshot();

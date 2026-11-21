@@ -51,6 +51,7 @@ export interface OmniDeckBridge {
   mediaPlayPause: (serviceId?: string) => Promise<DesktopSnapshot>;
   mediaNext: (serviceId?: string) => Promise<void>;
   mediaPrevious: (serviceId?: string) => Promise<void>;
+  mediaSeek: (targetTimeSec: number, serviceId?: string) => Promise<DesktopSnapshot>;
   mediaLikeTrack: (serviceId?: string) => Promise<DesktopSnapshot>;
   mediaDislikeTrack: (serviceId?: string) => Promise<DesktopSnapshot>;
   resumeAutoPaused: () => Promise<DesktopSnapshot>;

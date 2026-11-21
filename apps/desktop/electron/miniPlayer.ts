@@ -44,8 +44,8 @@ export class MiniPlayerManager {
       return;
     }
 
-    const defaultWidth = 408;
-    const defaultHeight = 134;
+    const defaultWidth = 420;
+    const defaultHeight = 156;
     const primaryWorkArea = screen.getPrimaryDisplay().workArea;
     const defaultX = primaryWorkArea.x + primaryWorkArea.width - defaultWidth - 24;
     const defaultY = primaryWorkArea.y + primaryWorkArea.height - defaultHeight - 24;
@@ -59,8 +59,8 @@ export class MiniPlayerManager {
     const miniWin = new BrowserWindow({
       width: bounds.width,
       height: bounds.height,
-      minWidth: 300,
-      minHeight: 112,
+      minWidth: 310,
+      minHeight: 132,
       maxWidth: 720,
       maxHeight: 280,
       x: bounds.x,

@@ -92,7 +92,7 @@ export class UpdateManager {
 
     this.startupTimer = setTimeout(() => {
       void this.checkForUpdates(true);
-    }, 6_000);
+    }, 1_500);
 
     // Re-check every 4 hours while app remains open
     this.periodicTimer = setInterval(() => {
@@ -125,16 +125,9 @@ export class UpdateManager {
       try {
         await autoUpdater.checkForUpdates();
         return this.state;
-      } catch (err) {
-        if (!silent) {
-          this.updateState({
-            phase: 'error',
-            message: `Update check failed: ${err instanceof Error ? err.message : String(err)}`,
-          });
-        } else {
-          this.updateState({ phase: 'idle' });
-        }
-        return this.state;
+      } catch {
+        // Fall back to GitHub Releases REST API so the top CTA banner still alerts the user
+        return this.checkGitHubReleasesApi(silent);
       }
     }
 
@@ -218,10 +211,18 @@ export class UpdateManager {
     });
 
     autoUpdater.on('error', (err) => {
-      this.updateState({
-        phase: 'error',
-        message: `Auto-update error: ${err?.message ?? String(err)}`,
-      });
+      if (this.state.availableVersion) {
+        this.updateState({
+          phase: 'available',
+          message: `OmniDeck v${this.state.availableVersion} is available to download.`,
+        });
+      } else {
+        this.updateState({
+          phase: 'error',
+          message: `Auto-update error: ${err?.message ?? String(err)}`,
+        });
+        void this.checkGitHubReleasesApi(true);
+      }
     });
   }
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   createInitialRuntimeState,
   getVisibleServices,
@@ -18,6 +18,7 @@ import { SettingsModal, type SettingsTab } from './components/SettingsModal';
 import { NowPlayingHub, type NowPlayingMode } from './components/NowPlayingHub';
 import {
   CloseIcon,
+  DownloadCloudIcon,
   MoreDotsIcon,
   SearchIcon,
   SlidersIcon,
@@ -41,6 +42,8 @@ export function App() {
   const [nowPlayingMode, setNowPlayingMode] = useState<NowPlayingMode>('closed');
   const [listeningStats, setListeningStats] = useState<ListeningStatsSummary | null>(null);
   const [tempBrowserBarOpen, setTempBrowserBarOpen] = useState(false);
+  const [dismissedUpdateVersion, setDismissedUpdateVersion] = useState<string | null>(null);
+  const startupUpdateCheckedRef = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -89,6 +92,15 @@ export function App() {
     document.documentElement.setAttribute('data-theme', theme);
   }, [snapshot?.config.settings.theme]);
 
+  // Trigger an automatic update check immediately on first launch
+  useEffect(() => {
+    if (!snapshot || startupUpdateCheckedRef.current) return;
+    startupUpdateCheckedRef.current = true;
+    if (snapshot.config.settings.autoCheckUpdates && snapshot.update.phase === 'idle') {
+      void api.checkForUpdates();
+    }
+  }, [api, snapshot]);
+
   useEffect(() => {
     void api.setOverlayOpen(modal !== 'none' || nowPlayingMode === 'stage');
   }, [api, modal, nowPlayingMode]);
@@ -122,8 +134,20 @@ export function App() {
         nowPlayingMode !== 'closed'),
   );
 
+  const hasUpdateAction =
+    snapshot?.update.phase === 'available' ||
+    snapshot?.update.phase === 'downloading' ||
+    snapshot?.update.phase === 'downloaded';
+
+  const showUpdateBanner = Boolean(
+    snapshot &&
+      hasUpdateAction &&
+      (!dismissedUpdateVersion || dismissedUpdateVersion !== snapshot.update.availableVersion),
+  );
+
   const isTopBar = (snapshot?.config.settings.navPosition ?? 'top') === 'top';
   const topBarHeight = isTopBar ? 46 : 38;
+  const updateBannerHeight = showUpdateBanner ? 38 : 0;
   const browserStripHeight = showBrowserBar ? 38 : 0;
   const bottomDockHeight = showMediaDock ? 48 : 0;
   const drawerRightInset =
@@ -134,14 +158,23 @@ export function App() {
     if (!snapshot) return;
 
     void api.setChromeInsets({
-      top: topBarHeight + browserStripHeight,
+      top: topBarHeight + updateBannerHeight + browserStripHeight,
       left: isTopBar ? 0 : 70,
       right: drawerRightInset,
       bottom: bottomDockHeight,
       splitDividerWidth: 8,
       splitHeaderHeight: 34,
     });
-  }, [api, snapshot, isTopBar, topBarHeight, browserStripHeight, bottomDockHeight, drawerRightInset]);
+  }, [
+    api,
+    snapshot,
+    isTopBar,
+    topBarHeight,
+    updateBannerHeight,
+    browserStripHeight,
+    bottomDockHeight,
+    drawerRightInset,
+  ]);
 
   // Keyboard shortcuts when renderer has focus
   useEffect(() => {
@@ -358,6 +391,23 @@ export function App() {
                   <span>Close Player</span>
                 </button>
               )}
+              {hasUpdateAction && (
+                <button
+                  type="button"
+                  className="pill-btn pill-btn--update"
+                  title={update.message}
+                  onClick={handleUpdateClick}
+                >
+                  <DownloadCloudIcon size={12} />
+                  <span>
+                    {update.phase === 'downloaded'
+                      ? `Restart v${update.availableVersion}`
+                      : update.phase === 'downloading'
+                        ? `${update.progressPercent ?? 0}%`
+                        : `v${update.availableVersion}`}
+                  </span>
+                </button>
+              )}
               <button
                 type="button"
                 className="pill-btn"
@@ -429,6 +479,90 @@ export function App() {
               </div>
             </div>
           </header>
+        )}
+
+        {showUpdateBanner && (
+          <div className="update-cta-banner" role="status" aria-live="polite">
+            <div className="update-cta-banner__left">
+              <span className="update-cta-banner__badge">
+                <DownloadCloudIcon size={12} />
+                <span>
+                  {update.phase === 'downloaded'
+                    ? 'READY TO INSTALL'
+                    : update.phase === 'downloading'
+                      ? 'DOWNLOADING'
+                      : 'UPDATE AVAILABLE'}
+                </span>
+              </span>
+              <span className="update-cta-banner__text">
+                {update.phase === 'downloaded' ? (
+                  <>
+                    <strong>OmniDeck v{update.availableVersion}</strong> is downloaded and ready!{' '}
+                    <span className="update-cta-banner__sub">
+                      (Current: v{update.currentVersion})
+                    </span>
+                  </>
+                ) : update.phase === 'downloading' ? (
+                  <>
+                    Downloading <strong>OmniDeck v{update.availableVersion}</strong> in the
+                    background ({update.progressPercent ?? 0}%)…
+                  </>
+                ) : (
+                  <>
+                    A new version <strong>OmniDeck v{update.availableVersion}</strong> is available!{' '}
+                    <span className="update-cta-banner__sub">
+                      (Current: v{update.currentVersion})
+                    </span>
+                  </>
+                )}
+              </span>
+            </div>
+
+            <div className="update-cta-banner__actions">
+              {update.phase === 'downloading' && (
+                <div className="update-cta-banner__progress" aria-hidden="true">
+                  <div
+                    className="update-cta-banner__progress-fill"
+                    style={{ width: `${Math.min(100, Math.max(4, update.progressPercent ?? 0))}%` }}
+                  />
+                </div>
+              )}
+              {update.phase === 'downloaded' && (
+                <button
+                  type="button"
+                  className="update-cta-banner__btn update-cta-banner__btn--primary"
+                  onClick={() => void api.installUpdate()}
+                >
+                  Install &amp; Restart Now
+                </button>
+              )}
+              {update.phase === 'available' && (
+                <button
+                  type="button"
+                  className="update-cta-banner__btn update-cta-banner__btn--primary"
+                  onClick={() => void api.openReleasePage()}
+                >
+                  Download v{update.availableVersion}
+                </button>
+              )}
+              <button
+                type="button"
+                className="update-cta-banner__btn"
+                onClick={() => void api.openReleasePage()}
+              >
+                Release Notes
+              </button>
+              <button
+                type="button"
+                className="update-cta-banner__dismiss"
+                aria-label="Dismiss update notification"
+                title="Hide for now"
+                onClick={() => setDismissedUpdateVersion(update.availableVersion ?? 'dismissed')}
+              >
+                <CloseIcon size={11} />
+              </button>
+            </div>
+          </div>
         )}
 
         {showBrowserBar && (
@@ -514,7 +648,7 @@ export function App() {
             nowPlaying={nowPlaying}
             services={config.services}
             aiConfig={config.settings.aiCompanion}
-            topOffset={topBarHeight + browserStripHeight}
+            topOffset={topBarHeight + updateBannerHeight + browserStripHeight}
             bottomOffset={bottomDockHeight}
             onClose={() => setNowPlayingMode('closed')}
             onToggleStageMode={() =>

@@ -5,7 +5,7 @@ import {
   DEFAULT_POWER_UPS,
 } from '@omnideck/shared';
 import { buildDuckFactorScript, buildEqualizerScript } from './audioEngine.js';
-import { buildMediaControlScript } from './mediaScripts.js';
+import { buildMediaControlScript, buildSeekMediaScript } from './mediaScripts.js';
 import { buildSetVolumeScript, READ_MEDIA_METADATA_SCRIPT } from './nativePolish.js';
 import {
   buildAudiblePowerUpScript,
@@ -40,6 +40,7 @@ describe('injected browser scripts syntax validation', () => {
       ['buildMediaControlScript(play-pause)', buildMediaControlScript('play-pause')],
       ['buildMediaControlScript(like-track)', buildMediaControlScript('like-track')],
       ['buildMediaControlScript(dislike-track)', buildMediaControlScript('dislike-track')],
+      ['buildSeekMediaScript', buildSeekMediaScript(95.4)],
       ['buildYouTubePowerUpScript(youtube)', buildYouTubePowerUpScript('youtube', DEFAULT_POWER_UPS)],
       [
         'buildYouTubePowerUpScript(youtube-music)',
