@@ -677,11 +677,38 @@ export class ViewManager {
         this.showToast('Rewound 15s after sleep timer', 2400);
       }
 
+      const wasPipOpen =
+        action === 'next' || action === 'previous'
+          ? Boolean(
+              await wc
+                .executeJavaScript('Boolean(document.pictureInPictureElement)', true)
+                .catch(() => false),
+            )
+          : false;
+
       const result = await wc.executeJavaScript(buildMediaControlScript(action), true);
       if (action === 'play' || action === 'play-pause') {
         this.lastNowPlayingServiceId = targetId;
         if (this.autoPausedServiceId === targetId) {
           this.autoPausedServiceId = null;
+        }
+      }
+      if (action === 'next' || action === 'previous') {
+        // Refresh track metadata promptly so Mini-Player HUD & MediaDock reflect the new song immediately
+        setTimeout(() => void this.pollMediaMetadata(targetId, true), 450);
+        setTimeout(() => void this.pollMediaMetadata(targetId, true), 1300);
+
+        // If Chromium Video PiP was open and closed during track switch, re-attach it cleanly on the new track
+        if (wasPipOpen) {
+          const restorePip = () => {
+            const curWc = this.getMediaWebContents(targetId);
+            if (!curWc || curWc.isDestroyed()) return;
+            void curWc
+              .executeJavaScript(buildMediaControlScript('pip-enter'), true)
+              .catch(() => {});
+          };
+          setTimeout(restorePip, 900);
+          setTimeout(restorePip, 1900);
         }
       }
       if (action === 'pip') {
@@ -1645,7 +1672,21 @@ export class ViewManager {
         this.autoPausedServiceId = null;
       }
       this.handleSmartAudioSwitching(service.id);
-      void this.pollMediaMetadata(service.id);
+      void this.pollMediaMetadata(service.id, true);
+      if (service.id === 'youtube' || service.id === 'youtube-music') {
+        void wc
+          .executeJavaScript('Boolean(window.__odPipNeedsRestore && !document.pictureInPictureElement)', true)
+          .then((needsRestore) => {
+            if (needsRestore && !wc.isDestroyed()) {
+              setTimeout(() => {
+                if (!wc.isDestroyed()) {
+                  void wc.executeJavaScript(buildMediaControlScript('pip-enter'), true).catch(() => {});
+                }
+              }, 500);
+            }
+          })
+          .catch(() => {});
+      }
       this.emitSnapshot();
     });
 

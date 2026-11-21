@@ -1,6 +1,6 @@
 {
   "name": "@omnideck/desktop",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "private": true,
   "description": "OmniDeck Desktop — Widevine DRM-enabled multi-service media hub for Windows and Linux",
   "author": "OmniDeck Contributors <support@omnideck.dev>",

@@ -15,9 +15,22 @@ export class MiniPlayerManager {
     return Boolean(this.win && !this.win.isDestroyed() && this.win.isVisible());
   }
 
+  /**
+   * Re-asserts highest reliable Windows/Linux always-on-top Z-order without stealing focus
+   * from whatever app the user is working in.
+   */
+  ensureOnTop(): void {
+    if (!this.win || this.win.isDestroyed()) return;
+    if (!this.win.isVisible()) {
+      this.win.showInactive();
+    }
+    this.win.setAlwaysOnTop(true, 'screen-saver', 1);
+    this.win.moveTop();
+  }
+
   open(snapshot?: DesktopSnapshot): void {
     if (this.win && !this.win.isDestroyed()) {
-      this.win.showInactive();
+      this.ensureOnTop();
       if (snapshot) this.broadcast(snapshot);
       this.onStateChanged();
       return;
@@ -53,8 +66,16 @@ export class MiniPlayerManager {
       },
     });
 
-    miniWin.setAlwaysOnTop(true, 'floating');
+    // 'screen-saver' level prevents Windows DWM from dropping the frameless HUD behind
+    // maximized windows or OmniDeck's main window after clicking media controls.
+    miniWin.setAlwaysOnTop(true, 'screen-saver', 1);
     miniWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+
+    miniWin.on('blur', () => {
+      if (!miniWin.isDestroyed() && miniWin.isVisible()) {
+        miniWin.setAlwaysOnTop(true, 'screen-saver', 1);
+      }
+    });
 
     miniWin.on('moved', () => {
       if (!miniWin.isDestroyed()) {
@@ -70,6 +91,9 @@ export class MiniPlayerManager {
 
     miniWin.webContents.on('did-finish-load', () => {
       if (snapshot) this.broadcast(snapshot);
+      if (!miniWin.isDestroyed()) {
+        miniWin.setAlwaysOnTop(true, 'screen-saver', 1);
+      }
     });
 
     const devServerUrl = process.env.VITE_DEV_SERVER_URL;

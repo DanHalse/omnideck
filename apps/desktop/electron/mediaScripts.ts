@@ -5,6 +5,7 @@ export type MediaControlAction =
   | 'next'
   | 'previous'
   | 'pip'
+  | 'pip-enter'
   | 'rewind-15'
   | 'like-track';
 
@@ -37,18 +38,50 @@ export function buildMediaControlScript(action: MediaControlAction): string {
       return false;
     };
 
-    if (${JSON.stringify(action)} === 'pip') {
+    const bindPipPersistence = (video) => {
+      if (!video || video.__odPipTracked) return;
+      video.__odPipTracked = true;
+      video.addEventListener('enterpictureinpicture', () => {
+        window.__odPipActive = true;
+        window.__odPipNeedsRestore = false;
+      });
+      video.addEventListener('leavepictureinpicture', () => {
+        window.__odPipActive = false;
+        window.__odPipLeftAt = Date.now();
+        // If Chromium closed PiP right as the video emptied or swapped tracks, mark for restore
+        if (video.readyState <= 1 || video.ended) {
+          window.__odPipNeedsRestore = true;
+        }
+      });
+      const markIfJustLeft = () => {
+        if (window.__odPipLeftAt && Date.now() - window.__odPipLeftAt < 2500) {
+          window.__odPipNeedsRestore = true;
+        }
+      };
+      video.addEventListener('emptied', markIfJustLeft);
+      video.addEventListener('loadstart', markIfJustLeft);
+    };
+
+    if (${JSON.stringify(action)} === 'pip' || ${JSON.stringify(action)} === 'pip-enter') {
       const videos = Array.from(document.querySelectorAll('video'))
         .filter((v) => v.readyState >= 2 && v.videoWidth > 0)
         .sort((a, b) => (b.clientWidth * b.clientHeight) - (a.clientWidth * a.clientHeight));
       const target = videos[0];
       if (!target) return 'no-video';
+      bindPipPersistence(target);
       if (document.pictureInPictureElement) {
+        if (${JSON.stringify(action)} === 'pip-enter') {
+          window.__odPipNeedsRestore = false;
+          return 'already-in-pip';
+        }
+        window.__odPipNeedsRestore = false;
+        window.__odPipActive = false;
         document.exitPictureInPicture().catch(() => {});
         return 'exited';
       }
       if (typeof target.requestPictureInPicture === 'function') {
         target.disablePictureInPicture = false;
+        window.__odPipNeedsRestore = false;
         target.requestPictureInPicture().catch(() => {});
         return 'entered';
       }

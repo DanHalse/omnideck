@@ -159,11 +159,48 @@ function sendUiCommand(command: UiCommandEvent): void {
   }
 }
 
+let lastMiniLyricsKey = '';
+
 function broadcastSnapshot(snapshot: DesktopSnapshot): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('omnideck:snapshot', snapshot);
   }
   miniPlayer?.broadcast(snapshot);
+
+  // When Floating Mini-Player HUD is open and song changes, auto-fetch synced lyrics in background
+  const np = snapshot.nowPlaying;
+  if (
+    miniPlayer?.isOpen() &&
+    np.serviceId &&
+    (np.serviceId === 'youtube-music' || np.serviceId === 'spotify') &&
+    np.title
+  ) {
+    const trackKey = `${np.serviceId}::${np.title.toLowerCase()}`;
+    if (trackKey !== lastMiniLyricsKey) {
+      lastMiniLyricsKey = trackKey;
+      const aiCfg = store?.get().settings.aiCompanion ?? mergeAiCompanionConfig(null);
+      if (!musicIntel) musicIntel = new MusicIntelService();
+      void musicIntel
+        .getArtistDossier(
+          {
+            serviceId: np.serviceId,
+            title: np.title,
+            artist: np.artist,
+            album: np.album,
+            artworkUrl: np.artworkUrl,
+            durationSec: np.durationSec,
+          },
+          { ...aiCfg, autoEnrich: false },
+        )
+        .then((dossier) => {
+          if (dossier.lyrics?.synced && dossier.lyrics.lines.length > 0) {
+            viewManager?.setActiveLyrics(trackKey, dossier.lyrics.lines);
+          }
+        })
+        .catch(() => {});
+    }
+  }
+
   refreshTrayMenu();
 }
 
@@ -717,14 +754,25 @@ function registerIpcHandlers(): void {
   });
 
   // Unified Media, Smart Audio, Sleep Timer, Audible Dock & PiP
-  ipcMain.handle('omnideck:media-play-pause', (_e, serviceId?: string) =>
-    viewManager?.runMediaAction('play-pause', serviceId),
-  );
+  const keepMiniPlayerOnTop = () => {
+    if (!miniPlayer?.isOpen()) return;
+    miniPlayer.ensureOnTop();
+    setTimeout(() => {
+      if (miniPlayer?.isOpen()) miniPlayer.ensureOnTop();
+    }, 220);
+  };
+  ipcMain.handle('omnideck:media-play-pause', async (_e, serviceId?: string) => {
+    const res = await viewManager?.runMediaAction('play-pause', serviceId);
+    keepMiniPlayerOnTop();
+    return res;
+  });
   ipcMain.handle('omnideck:media-next', async (_e, serviceId?: string) => {
     await viewManager?.runMediaAction('next', serviceId);
+    keepMiniPlayerOnTop();
   });
   ipcMain.handle('omnideck:media-previous', async (_e, serviceId?: string) => {
     await viewManager?.runMediaAction('previous', serviceId);
+    keepMiniPlayerOnTop();
   });
   ipcMain.handle('omnideck:media-like', (_e, serviceId?: string) =>
     viewManager?.runMediaAction('like-track', serviceId),
