@@ -43,6 +43,7 @@ export function MiniPlayerApp() {
   const lastSeekSentAtRef = useRef(0);
   const pendingSeekRef = useRef<{ serviceId?: string; timeSec: number } | null>(null);
   const seekFlushTimerRef = useRef<number | null>(null);
+  const isSeekingRef = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -393,25 +394,43 @@ export function MiniPlayerApp() {
               value={durationSec > 0 ? Math.min(durationSec, effectiveSeekSec) : 0}
               aria-label="Seek track position"
               style={{ '--seek-pct': `${seekPct.toFixed(1)}%` } as CSSProperties}
+              onPointerDown={() => {
+                if (durationSec <= 0) return;
+                isSeekingRef.current = true;
+              }}
               onChange={(e) => {
                 if (durationSec <= 0) return;
+                isSeekingRef.current = true;
                 const next = Number(e.target.value);
                 setDragSeekSec(next);
                 sendSeekThrottled(next, false);
               }}
               onPointerUp={(e) => {
-                if (durationSec <= 0) return;
+                if (!isSeekingRef.current || durationSec <= 0) {
+                  isSeekingRef.current = false;
+                  setDragSeekSec(null);
+                  return;
+                }
                 const next = Number(e.currentTarget.value);
+                isSeekingRef.current = false;
                 sendSeekThrottled(next, true);
                 setDragSeekSec(null);
               }}
               onKeyUp={(e) => {
-                if (durationSec <= 0) return;
+                if (!isSeekingRef.current || durationSec <= 0) {
+                  isSeekingRef.current = false;
+                  setDragSeekSec(null);
+                  return;
+                }
                 const next = Number(e.currentTarget.value);
+                isSeekingRef.current = false;
                 sendSeekThrottled(next, true);
                 setDragSeekSec(null);
               }}
-              onBlur={() => setDragSeekSec(null)}
+              onBlur={() => {
+                isSeekingRef.current = false;
+                setDragSeekSec(null);
+              }}
             />
             <span className="mini-hud__seek-time mini-hud__seek-time--end">
               {durationSec > 0 ? formatSec(durationSec) : '--:--'}

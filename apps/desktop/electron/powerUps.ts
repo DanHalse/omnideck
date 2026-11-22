@@ -426,23 +426,59 @@ export function buildYouTubePowerUpScript(
         }
       }, true);
 
-      // Force Original Audio Track (defeats YouTube's forced AI auto-dubbing)
+      // Force Original Audio Track (defeats YouTube's forced AI auto-dubbing — runs at most once per video)
+      const audioHandledVids = new Set();
+      let lastYtWatchHref = location.href;
+      const readTrackLabel = (tr) => {
+        if (!tr || typeof tr !== 'object') return '';
+        const parts = [tr.displayName, tr.name, tr.languageName, tr.xtags, tr.id]
+          .filter((v) => typeof v === 'string' && v.length > 0);
+        return parts.join(' ').toLowerCase();
+      };
       const enforceOriginalAudio = () => {
+        if (location.href !== lastYtWatchHref) {
+          lastYtWatchHref = location.href;
+          window.__odAbLoop = { a: null, b: null };
+        }
         if (!window.__odYtCfg.forceOriginalAudio) return;
         try {
+          const vid = new URLSearchParams(location.search).get('v') || '';
+          if (!vid || audioHandledVids.has(vid)) return;
+
           const player = document.getElementById('movie_player');
           if (!player || typeof player.getAvailableAudioTracks !== 'function' || typeof player.getAudioTrack !== 'function') return;
           const tracks = player.getAvailableAudioTracks();
-          if (!Array.isArray(tracks) || tracks.length < 2) return;
+          if (!Array.isArray(tracks) || tracks.length < 2) {
+            audioHandledVids.add(vid);
+            return;
+          }
           const current = player.getAudioTrack();
-          const curStr = JSON.stringify(current || '').toLowerCase();
-          if (!curStr.includes('auto-dub') && !curStr.includes('dubbed') && !curStr.includes('auto_dub')) return;
+          const curLabel = readTrackLabel(current);
+          // Mark video checked right away so we never repeatedly call setAudioTrack and restart playback
+          audioHandledVids.add(vid);
+          if (!curLabel.includes('auto-dub') && !curLabel.includes('dubbed') && !curLabel.includes('auto_dub')) {
+            return;
+          }
           const orig = tracks.find((tr) => {
-            const s = JSON.stringify(tr || '').toLowerCase();
-            return s.includes('original') || (!s.includes('dub') && s.includes('default'));
-          }) || tracks.find((tr) => !JSON.stringify(tr || '').toLowerCase().includes('dub'));
-          if (orig && typeof player.setAudioTrack === 'function') {
+            const lbl = readTrackLabel(tr);
+            return lbl.includes('original');
+          });
+          if (
+            orig &&
+            orig !== current &&
+            (!current || !orig.id || orig.id !== current.id) &&
+            typeof player.setAudioTrack === 'function'
+          ) {
+            const v = document.querySelector('video.html5-main-video');
+            const resumeAt = v && Number.isFinite(v.currentTime) ? v.currentTime : 0;
             player.setAudioTrack(orig);
+            if (v && resumeAt > 0.5) {
+              setTimeout(() => {
+                if (v.currentTime < 0.5 && Number.isFinite(v.duration) && resumeAt < v.duration) {
+                  v.currentTime = resumeAt;
+                }
+              }, 350);
+            }
             showMiniToast('Switched to Original Audio Track');
           }
         } catch {}
