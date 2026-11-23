@@ -57,20 +57,23 @@ export async function fetchYouTubeDislikes(videoId: string): Promise<YouTubeDisl
 
   const raw = await fetchJsonWithTimeout(
     `https://returnyoutubedislikeapi.com/votes?videoId=${encodeURIComponent(videoId)}`,
-    3500,
+    5500,
   );
   let stats: YouTubeDislikeStats | null = null;
   if (raw && typeof raw === 'object') {
     const rec = raw as { likes?: unknown; dislikes?: unknown; rating?: unknown };
     if (typeof rec.dislikes === 'number' && Number.isFinite(rec.dislikes)) {
       stats = {
-        likes: typeof rec.likes === 'number' && Number.isFinite(rec.likes) ? rec.likes : 0,
+        likes: typeof rec.likes === 'number' && Number.isFinite(rec.likes) ? Math.max(0, Math.round(rec.likes)) : 0,
         dislikes: Math.max(0, Math.round(rec.dislikes)),
         rating: typeof rec.rating === 'number' ? rec.rating : undefined,
       };
     }
   }
-  dislikeCache.set(videoId, { value: stats, expiresAt: Date.now() + 20 * 60_000 });
+  dislikeCache.set(videoId, {
+    value: stats,
+    expiresAt: Date.now() + (stats ? 20 * 60_000 : 15_000),
+  });
   return stats;
 }
 
@@ -310,12 +313,16 @@ export function buildYouTubePowerUpScript(
       autoDismiss: ${Boolean(powerUps.youtubeAutoDismissStillListening)},
       rememberSpeed: ${Boolean(!isMusic && powerUps.youtubeRememberSpeedQuality)},
       forceOriginalAudio: ${Boolean(!isMusic && powerUps.youtubeForceOriginalAudio)},
+      returnDislikes: ${Boolean(!isMusic && powerUps.youtubeReturnDislikes)},
       hideEndScreens: ${Boolean(!isMusic && powerUps.youtubeHideEndScreens)},
       disableHoverPreview: ${Boolean(!isMusic && powerUps.youtubeDisableHoverPreview)},
       playerControls: ${Boolean(!isMusic && powerUps.youtubePlayerControls)},
       ytmAudioOnly: ${Boolean(isMusic && powerUps.ytmAudioOnlyMode)},
       ytmPlaylistFilter: ${Boolean(isMusic && powerUps.ytmPlaylistQuickFilter)}
     };
+    if (typeof window.__odApplyRyd === 'function') {
+      try { window.__odApplyRyd(); } catch {}
+    }
 
     const syncDynamicCss = () => {
       let st = document.getElementById('__od_yt_powerup_css');
@@ -657,7 +664,213 @@ export function buildYouTubePowerUpScript(
         }
       };
 
-      // Periodic watcher: dismiss "Still listening?", enforce original audio, mount buttons & YTM filter
+      // Persistent Return YouTube Dislike renderer (survives late Polymer hydration & re-renders)
+      const fmtRyd = (n) => {
+        if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\\.0$/, '') + 'M';
+        if (n >= 1000) return (n / 1000).toFixed(1).replace(/\\.0$/, '') + 'K';
+        return String(n);
+      };
+
+      const expandPillButton = (btn, selector) => {
+        if (!btn) return;
+        const vm = selector ? btn.closest(selector) : null;
+        if (vm) {
+          vm.style.setProperty('width', 'auto', 'important');
+          vm.style.setProperty('overflow', 'visible', 'important');
+        }
+        btn.style.setProperty('width', 'auto', 'important');
+        btn.style.setProperty('min-width', 'max-content', 'important');
+        btn.style.setProperty('padding-left', '12px', 'important');
+        btn.style.setProperty('padding-right', '14px', 'important');
+        btn.style.setProperty('gap', '6px', 'important');
+        btn.style.setProperty('overflow', 'visible', 'important');
+      };
+
+      window.__odApplyRyd = () => {
+        try {
+          if (window.__odYtCfg.isMusic) return;
+          if (!window.__odYtCfg.returnDislikes) {
+            const oldDis = document.getElementById('__od_ryd_count');
+            if (oldDis) oldDis.remove();
+            const oldLike = document.getElementById('__od_ryd_like_count');
+            if (oldLike) oldLike.remove();
+            const oldBar = document.getElementById('__od_ryd_bar');
+            if (oldBar) oldBar.remove();
+            return;
+          }
+          const stats = window.__odRydStats;
+          if (!stats || !stats.videoId) return;
+          const vid = stats.videoId;
+          const curVid = new URLSearchParams(location.search).get('v') || '';
+          const matchesUrl = curVid === vid || location.pathname.includes('/shorts/' + vid);
+          if (!matchesUrl) return;
+
+          const likes = Math.max(0, Math.round(stats.likes || 0));
+          const dislikes = Math.max(0, Math.round(stats.dislikes || 0));
+
+          const dislikeBtn =
+            document.querySelector('ytd-watch-metadata dislike-button-view-model button') ||
+            document.querySelector('dislike-button-view-model button') ||
+            document.querySelector('#segmented-dislike-button button') ||
+            document.querySelector('ytd-watch-metadata button[aria-label*="Dislike" i]');
+          if (!dislikeBtn) return;
+
+          expandPillButton(dislikeBtn, 'dislike-button-view-model, #segmented-dislike-button');
+
+          let disLabel = dislikeBtn.querySelector('#__od_ryd_count');
+          if (!disLabel) {
+            disLabel = document.createElement('span');
+            disLabel.id = '__od_ryd_count';
+            disLabel.style.cssText = 'display:inline-flex;align-items:center;font:500 14px/1 "Roboto","YouTube Sans",system-ui,sans-serif;color:inherit;white-space:nowrap;';
+            const touchShape = dislikeBtn.querySelector('.yt-spec-touch-feedback-shape, yt-touch-feedback-shape');
+            if (touchShape) {
+              dislikeBtn.insertBefore(disLabel, touchShape);
+            } else {
+              dislikeBtn.appendChild(disLabel);
+            }
+          }
+          disLabel.textContent = fmtRyd(dislikes);
+          dislikeBtn.title = 'Likes: ' + likes.toLocaleString() + ' · Dislikes: ' + dislikes.toLocaleString() + ' (Return YouTube Dislike)';
+
+          const likeBtn =
+            document.querySelector('ytd-watch-metadata like-button-view-model button') ||
+            document.querySelector('like-button-view-model button') ||
+            document.querySelector('#segmented-like-button button') ||
+            document.querySelector('ytd-watch-metadata button[aria-label*="like" i]:not([aria-label*="dislike" i])');
+          if (likeBtn) {
+            likeBtn.title = 'Likes: ' + likes.toLocaleString() + ' · Dislikes: ' + dislikes.toLocaleString();
+            const nativeLikeText = likeBtn.querySelector('.yt-spec-button-shape-next__button-text-content');
+            const existingText = ((nativeLikeText ? nativeLikeText.textContent : '') || '').trim();
+            const fallbackEl = likeBtn.querySelector('#__od_ryd_like_count');
+            if (!/\\d/.test(existingText)) {
+              expandPillButton(likeBtn, 'like-button-view-model, #segmented-like-button');
+              let likeLabel = fallbackEl;
+              if (!likeLabel) {
+                likeLabel = document.createElement('span');
+                likeLabel.id = '__od_ryd_like_count';
+                likeLabel.style.cssText = 'display:inline-flex;align-items:center;font:500 14px/1 "Roboto","YouTube Sans",system-ui,sans-serif;color:inherit;white-space:nowrap;';
+                const likeTouch = likeBtn.querySelector('.yt-spec-touch-feedback-shape, yt-touch-feedback-shape');
+                if (likeTouch) {
+                  likeBtn.insertBefore(likeLabel, likeTouch);
+                } else {
+                  likeBtn.appendChild(likeLabel);
+                }
+              }
+              likeLabel.textContent = fmtRyd(likes);
+            } else if (fallbackEl) {
+              fallbackEl.remove();
+            }
+          }
+
+          const total = Math.max(1, likes + dislikes);
+          const pct = Math.min(100, Math.max(0, Math.round((likes / total) * 100)));
+          const seg = dislikeBtn.closest('segmented-like-dislike-button-view-model, ytd-segmented-like-dislike-button-renderer');
+          if (seg) {
+            seg.style.position = 'relative';
+            let bar = seg.querySelector('#__od_ryd_bar');
+            if (!bar) {
+              bar = document.createElement('div');
+              bar.id = '__od_ryd_bar';
+              bar.style.cssText = 'position:absolute;left:10px;right:10px;bottom:-5px;height:3px;border-radius:2px;background:rgba(240,82,82,0.82);overflow:hidden;pointer-events:none;';
+              const fill = document.createElement('div');
+              fill.id = '__od_ryd_fill';
+              fill.style.cssText = 'height:100%;background:#3ECF8E;transition:width 0.2s ease;';
+              bar.appendChild(fill);
+              seg.appendChild(bar);
+            }
+            bar.title = pct + '% liked (' + likes.toLocaleString() + ' likes / ' + dislikes.toLocaleString() + ' dislikes)';
+            const fill = bar.querySelector('#__od_ryd_fill');
+            if (fill) fill.style.width = pct + '%';
+          }
+        } catch {}
+      };
+
+      // In-YouTube Masthead Quick Back Button (Trusted-Types safe, zero innerHTML)
+      const ensureYtBackButton = () => {
+        if (window.__odYtCfg.isMusic) return;
+        const startSlot = document.querySelector('ytd-masthead #start');
+        if (!startSlot) return;
+
+        let backBtn = document.getElementById('__od_yt_back_btn');
+        if (!backBtn) {
+          backBtn = document.createElement('button');
+          backBtn.id = '__od_yt_back_btn';
+          backBtn.type = 'button';
+          backBtn.setAttribute('aria-label', 'Go back to previous YouTube page');
+          backBtn.style.cssText = 'width:36px;height:36px;border-radius:50%;border:none;background:transparent;color:var(--yt-spec-text-primary,currentColor);display:inline-flex;align-items:center;justify-content:center;margin:0 4px 0 0;padding:0;flex-shrink:0;transition:background 0.15s ease,opacity 0.15s ease;';
+
+          const svgNS = 'http://www.w3.org/2000/svg';
+          const svg = document.createElementNS(svgNS, 'svg');
+          svg.setAttribute('width', '20');
+          svg.setAttribute('height', '20');
+          svg.setAttribute('viewBox', '0 0 24 24');
+          svg.setAttribute('fill', 'none');
+          svg.setAttribute('stroke', 'currentColor');
+          svg.setAttribute('stroke-width', '2.1');
+          svg.setAttribute('stroke-linecap', 'round');
+          svg.setAttribute('stroke-linejoin', 'round');
+          svg.setAttribute('aria-hidden', 'true');
+          const p1 = document.createElementNS(svgNS, 'path');
+          p1.setAttribute('d', 'M19 12H5');
+          const p2 = document.createElementNS(svgNS, 'path');
+          p2.setAttribute('d', 'm12 19-7-7 7-7');
+          svg.appendChild(p1);
+          svg.appendChild(p2);
+          backBtn.appendChild(svg);
+
+          backBtn.onmouseenter = () => {
+            if (!backBtn.disabled) backBtn.style.background = 'rgba(128,128,128,0.18)';
+          };
+          backBtn.onmouseleave = () => {
+            backBtn.style.background = 'transparent';
+          };
+          backBtn.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            try {
+              window.history.back();
+              setTimeout(() => {
+                ensureYtBackButton();
+                if (typeof window.__odApplyRyd === 'function') window.__odApplyRyd();
+              }, 160);
+            } catch {}
+          };
+
+          const logo = startSlot.querySelector('#logo, ytd-topbar-logo-renderer');
+          if (logo) {
+            startSlot.insertBefore(backBtn, logo);
+          } else {
+            startSlot.prepend(backBtn);
+          }
+        }
+
+        const canBack = (window.navigation && typeof window.navigation.canGoBack === 'boolean')
+          ? window.navigation.canGoBack
+          : (window.history.length > 1);
+        backBtn.disabled = !canBack;
+        backBtn.style.opacity = canBack ? '0.92' : '0.28';
+        backBtn.style.cursor = canBack ? 'pointer' : 'default';
+        backBtn.title = canBack ? 'Back one step in YouTube (Alt+Left)' : 'No previous YouTube page';
+      };
+
+      const syncYtUiHooks = () => {
+        ensureYtBackButton();
+        if (typeof window.__odApplyRyd === 'function') window.__odApplyRyd();
+      };
+
+      document.addEventListener('yt-navigate-finish', () => {
+        syncYtUiHooks();
+        setTimeout(syncYtUiHooks, 450);
+        setTimeout(syncYtUiHooks, 1300);
+      }, true);
+      window.addEventListener('popstate', () => {
+        syncYtUiHooks();
+        setTimeout(syncYtUiHooks, 300);
+      }, true);
+
+      syncYtUiHooks();
+
+      // Periodic watcher: dismiss "Still listening?", enforce original audio, mount buttons, RYD & YTM filter
       setInterval(() => {
         if (window.__odYtCfg.autoDismiss) {
           const btns = document.querySelectorAll(
@@ -671,6 +884,8 @@ export function buildYouTubePowerUpScript(
         }
         enforceOriginalAudio();
         ensurePlayerButtons();
+        ensureYtBackButton();
+        if (typeof window.__odApplyRyd === 'function') window.__odApplyRyd();
         ensureYtmPlaylistFilter();
       }, 2600);
     }
@@ -691,40 +906,66 @@ export function buildSponsorSegmentsInjector(
 }
 
 /**
- * Injects Return YouTube Dislike count + subtle like/dislike ratio bar into YouTube's watch page.
+ * Injects Return YouTube Dislike count + like count fallback + like/dislike ratio bar into YouTube's watch page.
  */
 export function buildYouTubeDislikesInjector(
   videoId: string,
   likes: number,
   dislikes: number,
 ): string {
+  const safeLikes = Math.max(0, Math.round(likes));
+  const safeDislikes = Math.max(0, Math.round(dislikes));
   return `(function () {
     try {
       const vid = ${JSON.stringify(videoId)};
-      if (!location.search.includes(vid)) return;
+      const likes = ${safeLikes};
+      const dislikes = ${safeDislikes};
+      window.__odRydStats = { videoId: vid, likes: likes, dislikes: dislikes };
+      if (typeof window.__odApplyRyd === 'function') {
+        window.__odApplyRyd();
+        return;
+      }
+      const curVid = new URLSearchParams(location.search).get('v') || '';
+      if (curVid !== vid && !location.pathname.includes('/shorts/' + vid)) return;
+
       const fmt = (n) => {
         if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\\.0$/, '') + 'M';
         if (n >= 1000) return (n / 1000).toFixed(1).replace(/\\.0$/, '') + 'K';
         return String(n);
       };
       const dislikeBtn =
+        document.querySelector('ytd-watch-metadata dislike-button-view-model button') ||
         document.querySelector('dislike-button-view-model button') ||
         document.querySelector('#segmented-dislike-button button') ||
         document.querySelector('ytd-watch-metadata button[aria-label*="Dislike" i]');
       if (!dislikeBtn) return;
 
+      const dvm = dislikeBtn.closest('dislike-button-view-model, #segmented-dislike-button');
+      if (dvm) {
+        dvm.style.setProperty('width', 'auto', 'important');
+        dvm.style.setProperty('overflow', 'visible', 'important');
+      }
+      dislikeBtn.style.setProperty('width', 'auto', 'important');
+      dislikeBtn.style.setProperty('min-width', 'max-content', 'important');
+      dislikeBtn.style.setProperty('padding-left', '12px', 'important');
+      dislikeBtn.style.setProperty('padding-right', '14px', 'important');
+      dislikeBtn.style.setProperty('gap', '6px', 'important');
+      dislikeBtn.style.setProperty('overflow', 'visible', 'important');
+
       let label = dislikeBtn.querySelector('#__od_ryd_count');
       if (!label) {
         label = document.createElement('span');
         label.id = '__od_ryd_count';
-        label.style.cssText = 'margin-left:6px;font:600 13px/1 Roboto,system-ui,sans-serif;white-space:nowrap;';
-        dislikeBtn.appendChild(label);
+        label.style.cssText = 'display:inline-flex;align-items:center;font:500 14px/1 "Roboto","YouTube Sans",system-ui,sans-serif;color:inherit;white-space:nowrap;';
+        const touch = dislikeBtn.querySelector('.yt-spec-touch-feedback-shape, yt-touch-feedback-shape');
+        if (touch) dislikeBtn.insertBefore(label, touch);
+        else dislikeBtn.appendChild(label);
       }
-      label.textContent = fmt(${Math.max(0, Math.round(dislikes))});
-      dislikeBtn.title = 'Dislikes (Return YouTube Dislike): ' + (${Math.max(0, Math.round(dislikes))}).toLocaleString();
+      label.textContent = fmt(dislikes);
+      dislikeBtn.title = 'Likes: ' + likes.toLocaleString() + ' · Dislikes: ' + dislikes.toLocaleString() + ' (Return YouTube Dislike)';
 
-      const total = Math.max(1, ${Math.max(0, Math.round(likes))} + ${Math.max(0, Math.round(dislikes))});
-      const pct = Math.min(100, Math.max(0, Math.round((${Math.max(0, Math.round(likes))} / total) * 100)));
+      const total = Math.max(1, likes + dislikes);
+      const pct = Math.min(100, Math.max(0, Math.round((likes / total) * 100)));
       const seg = dislikeBtn.closest('segmented-like-dislike-button-view-model, ytd-segmented-like-dislike-button-renderer');
       if (seg) {
         seg.style.position = 'relative';
@@ -732,10 +973,10 @@ export function buildYouTubeDislikesInjector(
         if (!bar) {
           bar = document.createElement('div');
           bar.id = '__od_ryd_bar';
-          bar.style.cssText = 'position:absolute;left:8px;right:8px;bottom:-4px;height:2px;border-radius:2px;background:rgba(240,82,82,0.75);overflow:hidden;pointer-events:none;';
+          bar.style.cssText = 'position:absolute;left:10px;right:10px;bottom:-5px;height:3px;border-radius:2px;background:rgba(240,82,82,0.82);overflow:hidden;pointer-events:none;';
           const fill = document.createElement('div');
           fill.id = '__od_ryd_fill';
-          fill.style.cssText = 'height:100%;background:#3ECF8E;';
+          fill.style.cssText = 'height:100%;background:#3ECF8E;transition:width 0.2s ease;';
           bar.appendChild(fill);
           seg.appendChild(bar);
         }

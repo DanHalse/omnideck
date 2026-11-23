@@ -15,7 +15,7 @@ import {
 
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_CACHE_ENTRIES = 120;
-const USER_AGENT = 'OmniDeck/1.5.4 (https://github.com/DanHalse/omnideck)';
+const USER_AGENT = 'OmniDeck/1.5.5 (https://github.com/DanHalse/omnideck)';
 
 interface CacheFileShape {
   dossiers: Record<string, ArtistDossier>;

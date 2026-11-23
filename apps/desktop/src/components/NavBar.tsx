@@ -8,6 +8,7 @@ import type {
 } from '@omnideck/shared';
 import { ServiceIcon } from './ServiceIcon';
 import {
+  ArrowLeftIcon,
   BellOffIcon,
   CloseIcon,
   DownloadCloudIcon,
@@ -36,6 +37,8 @@ interface NavBarProps {
   workspaces: WorkspacePreset[];
   activeWorkspaceId: string;
   activeServiceId: string;
+  activeServiceName: string;
+  canGoBack: boolean;
   homeActive: boolean;
   splitEnabled: boolean;
   secondaryServiceId: string | null;
@@ -47,6 +50,7 @@ interface NavBarProps {
   update: UpdateState;
   hideUpdatePill?: boolean;
   onOpenHome: () => void;
+  onGoBack: () => void;
   onSelectService: (id: string) => void;
   onSelectWorkspace: (workspaceId: string) => void;
   onToggleMute: (id: string) => void;
@@ -74,6 +78,8 @@ export function NavBar({
   workspaces,
   activeWorkspaceId,
   activeServiceId,
+  activeServiceName,
+  canGoBack,
   homeActive,
   splitEnabled,
   secondaryServiceId,
@@ -85,6 +91,7 @@ export function NavBar({
   update,
   hideUpdatePill,
   onOpenHome,
+  onGoBack,
   onSelectService,
   onSelectWorkspace,
   onToggleMute,
@@ -325,6 +332,19 @@ export function NavBar({
         >
           <OmniDeckMark size={15} />
         </button>
+        {!homeActive && (
+          <button
+            type="button"
+            id="btn-quick-back"
+            className="icon-btn icon-btn--sm icon-btn--nav-back"
+            disabled={!canGoBack}
+            aria-label={`Back in ${activeServiceName}`}
+            title={canGoBack ? `Back one step in ${activeServiceName} (Alt+Left)` : `No previous page in ${activeServiceName}`}
+            onClick={onGoBack}
+          >
+            <ArrowLeftIcon size={14} />
+          </button>
+        )}
         <select
           aria-label="Switch workspace preset"
           className="workspace-select"

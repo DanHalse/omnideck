@@ -413,6 +413,12 @@
   color: var(--ink-primary);
 }
 
+.icon-btn:disabled {
+  opacity: 0.32;
+  cursor: default;
+  pointer-events: none;
+}
+
 .icon-btn--active {
   background: var(--accent-primary-soft);
   color: var(--accent-primary);

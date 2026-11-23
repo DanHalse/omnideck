@@ -17,6 +17,7 @@ import { ServiceManagerModal } from './components/ServiceManagerModal';
 import { SettingsModal, type SettingsTab } from './components/SettingsModal';
 import { NowPlayingHub, type NowPlayingMode } from './components/NowPlayingHub';
 import {
+  ArrowLeftIcon,
   CloseIcon,
   DownloadCloudIcon,
   MoreDotsIcon,
@@ -307,6 +308,8 @@ export function App() {
       workspaces={config.workspaces}
       activeWorkspaceId={config.activeWorkspaceId}
       activeServiceId={activeService.id}
+      activeServiceName={activeService.name}
+      canGoBack={!homeActive && Boolean(activeRuntime.canGoBack)}
       homeActive={homeActive}
       splitEnabled={config.splitView.enabled}
       secondaryServiceId={config.splitView.secondaryServiceId}
@@ -317,6 +320,7 @@ export function App() {
       toastMessage={toastMessage}
       update={update}
       onOpenHome={() => void api.openHome()}
+      onGoBack={() => void api.goBack(activeService.id)}
       onSelectService={(id) => void api.selectService(id)}
       onSelectWorkspace={(wsId) => void api.applyWorkspace(wsId)}
       onToggleMute={(id) => void api.toggleMute(id)}
@@ -359,6 +363,23 @@ export function App() {
             }}
           >
             <div className="rail-titlebar__left">
+              {!homeActive && (
+                <button
+                  type="button"
+                  id="btn-quick-back-rail"
+                  className="icon-btn icon-btn--sm icon-btn--nav-back"
+                  disabled={!activeRuntime.canGoBack}
+                  aria-label={`Back in ${activeService.name}`}
+                  title={
+                    activeRuntime.canGoBack
+                      ? `Back one step in ${activeService.name} (Alt+Left)`
+                      : `No previous page in ${activeService.name}`
+                  }
+                  onClick={() => void api.goBack(activeService.id)}
+                >
+                  <ArrowLeftIcon size={14} />
+                </button>
+              )}
               <select
                 aria-label="Switch workspace preset"
                 className="workspace-select"

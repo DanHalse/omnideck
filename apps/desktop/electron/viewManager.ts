@@ -403,6 +403,12 @@ export class ViewManager {
 
     // Re-apply Power-Ups live whenever any Power-Up toggle changed
     if (JSON.stringify(prevPowerUps) !== JSON.stringify(nextConfig.settings.powerUps)) {
+      if (
+        prevPowerUps.youtubeReturnDislikes !== nextConfig.settings.powerUps.youtubeReturnDislikes ||
+        prevPowerUps.youtubeDeArrow !== nextConfig.settings.powerUps.youtubeDeArrow
+      ) {
+        this.lastYtEnrichVideoId = '';
+      }
       for (const svc of nextConfig.services) {
         const view = this.views.get(svc.id);
         if (view && !view.webContents.isDestroyed()) {
@@ -1484,7 +1490,11 @@ export class ViewManager {
         this.lastYtEnrichVideoId = videoId;
         if (powerUps.youtubeReturnDislikes) {
           void fetchYouTubeDislikes(videoId).then((stats) => {
-            if (!stats || this.lastYtEnrichVideoId !== videoId) return;
+            if (this.lastYtEnrichVideoId !== videoId) return;
+            if (!stats) {
+              this.lastYtEnrichVideoId = '';
+              return;
+            }
             const curView = this.views.get('youtube');
             if (!curView || curView.webContents.isDestroyed()) return;
             const inject = () => {
@@ -1498,7 +1508,8 @@ export class ViewManager {
               }
             };
             inject();
-            setTimeout(inject, 1400);
+            setTimeout(inject, 600);
+            setTimeout(inject, 1800);
           });
         }
         if (powerUps.youtubeDeArrow) {
@@ -1708,6 +1719,9 @@ export class ViewManager {
 
     wc.on('did-finish-load', () => {
       if (wc.isDestroyed()) return;
+      if (service.id === 'youtube') {
+        this.lastYtEnrichVideoId = '';
+      }
       this.applyPowerUpsToView(service, view);
       const eq = this.config.settings.equalizer;
       if (eq.enabled || eq.compressorEnabled || (eq.volumeBoost && eq.volumeBoost > 1.005)) {
