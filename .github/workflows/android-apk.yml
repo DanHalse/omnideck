@@ -76,7 +76,7 @@ jobs:
           SIZE=$(wc -c < "apps/mobile/release/${OTA_BUNDLE}" | tr -d ' ')
           PUBLISHED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-          node -e "
+          V="${VERSION}" RV="${RUNTIME_VERSION}" BN="${OTA_BUNDLE}" SHA="${SHA256}" SZ="${SIZE}" APK="${APK_NAME}" TS="${PUBLISHED_AT}" MN="${OTA_MANIFEST}" node -e "
             const fs = require('node:fs');
             const manifest = {
               version: process.env.V,
@@ -88,7 +88,7 @@ jobs:
               publishedAt: process.env.TS,
             };
             fs.writeFileSync('apps/mobile/release/' + process.env.MN, JSON.stringify(manifest, null, 2) + '\n');
-          " V="${VERSION}" RV="${RUNTIME_VERSION}" BN="${OTA_BUNDLE}" SHA="${SHA256}" SZ="${SIZE}" APK="${APK_NAME}" TS="${PUBLISHED_AT}" MN="${OTA_MANIFEST}"
+          "
 
           ls -lh apps/mobile/release/
           cat "apps/mobile/release/${OTA_MANIFEST}"
