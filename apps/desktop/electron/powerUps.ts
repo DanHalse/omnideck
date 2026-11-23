@@ -739,10 +739,14 @@ export function buildYouTubePowerUpScript(
             document.querySelector('ytd-watch-metadata button[aria-label*="like" i]:not([aria-label*="dislike" i])');
           if (likeBtn) {
             likeBtn.title = 'Likes: ' + likes.toLocaleString() + ' · Dislikes: ' + dislikes.toLocaleString();
-            const nativeLikeText = likeBtn.querySelector('.yt-spec-button-shape-next__button-text-content');
-            const existingText = ((nativeLikeText ? nativeLikeText.textContent : '') || '').trim();
+            let nativeDigits = '';
+            for (const child of likeBtn.childNodes) {
+              if (child && child.id !== '__od_ryd_like_count') {
+                nativeDigits += (child.textContent || '');
+              }
+            }
             const fallbackEl = likeBtn.querySelector('#__od_ryd_like_count');
-            if (!/\\d/.test(existingText)) {
+            if (!/\\d/.test(nativeDigits)) {
               expandPillButton(likeBtn, 'like-button-view-model, #segmented-like-button');
               let likeLabel = fallbackEl;
               if (!likeLabel) {
@@ -785,11 +789,25 @@ export function buildYouTubePowerUpScript(
         } catch {}
       };
 
-      // In-YouTube Masthead Quick Back Button (Trusted-Types safe, zero innerHTML)
+      // In-YouTube Masthead Quick Back Button (Trusted-Types safe, explicit high-contrast styling)
       const ensureYtBackButton = () => {
         if (window.__odYtCfg.isMusic) return;
         const startSlot = document.querySelector('ytd-masthead #start');
         if (!startSlot) return;
+
+        const isDark =
+          document.documentElement.hasAttribute('dark') ||
+          Boolean(document.querySelector('ytd-app[dark], ytd-masthead[dark]'));
+        const probe =
+          document.querySelector('ytd-masthead #guide-button yt-icon') ||
+          document.querySelector('ytd-masthead #guide-button button');
+        let fg = probe ? getComputedStyle(probe).color : '';
+        if (!fg || fg === 'rgb(0, 0, 0)' || fg === 'rgba(0, 0, 0, 0)') {
+          fg = isDark ? '#f1f1f1' : '#0f0f0f';
+        }
+        const idleBg = isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)';
+        const hoverBg = isDark ? 'rgba(255,255,255,0.20)' : 'rgba(0,0,0,0.12)';
+        const borderClr = isDark ? 'rgba(255,255,255,0.20)' : 'rgba(0,0,0,0.16)';
 
         let backBtn = document.getElementById('__od_yt_back_btn');
         if (!backBtn) {
@@ -797,16 +815,16 @@ export function buildYouTubePowerUpScript(
           backBtn.id = '__od_yt_back_btn';
           backBtn.type = 'button';
           backBtn.setAttribute('aria-label', 'Go back to previous YouTube page');
-          backBtn.style.cssText = 'width:36px;height:36px;border-radius:50%;border:none;background:transparent;color:var(--yt-spec-text-primary,currentColor);display:inline-flex;align-items:center;justify-content:center;margin:0 4px 0 0;padding:0;flex-shrink:0;transition:background 0.15s ease,opacity 0.15s ease;';
+          backBtn.style.cssText = 'width:34px;height:34px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;margin:0 8px 0 4px;padding:0;flex-shrink:0;transition:background 0.15s ease,opacity 0.15s ease;';
 
           const svgNS = 'http://www.w3.org/2000/svg';
           const svg = document.createElementNS(svgNS, 'svg');
-          svg.setAttribute('width', '20');
-          svg.setAttribute('height', '20');
+          svg.setAttribute('width', '18');
+          svg.setAttribute('height', '18');
           svg.setAttribute('viewBox', '0 0 24 24');
           svg.setAttribute('fill', 'none');
           svg.setAttribute('stroke', 'currentColor');
-          svg.setAttribute('stroke-width', '2.1');
+          svg.setAttribute('stroke-width', '2.3');
           svg.setAttribute('stroke-linecap', 'round');
           svg.setAttribute('stroke-linejoin', 'round');
           svg.setAttribute('aria-hidden', 'true');
@@ -819,16 +837,28 @@ export function buildYouTubePowerUpScript(
           backBtn.appendChild(svg);
 
           backBtn.onmouseenter = () => {
-            if (!backBtn.disabled) backBtn.style.background = 'rgba(128,128,128,0.18)';
+            if (!backBtn.disabled) backBtn.style.background = backBtn.dataset.hoverBg || 'rgba(255,255,255,0.2)';
           };
           backBtn.onmouseleave = () => {
-            backBtn.style.background = 'transparent';
+            backBtn.style.background = backBtn.dataset.idleBg || 'rgba(255,255,255,0.1)';
           };
           backBtn.onclick = (e) => {
             e.preventDefault();
             e.stopPropagation();
             try {
-              window.history.back();
+              const hasNavBack = (window.navigation && typeof window.navigation.canGoBack === 'boolean')
+                ? window.navigation.canGoBack
+                : (window.history.length > 1);
+              if (hasNavBack) {
+                window.history.back();
+              } else if (location.pathname !== '/') {
+                const logoLink = document.querySelector('ytd-masthead #logo a');
+                if (logoLink && typeof logoLink.click === 'function') {
+                  logoLink.click();
+                } else {
+                  location.assign('/');
+                }
+              }
               setTimeout(() => {
                 ensureYtBackButton();
                 if (typeof window.__odApplyRyd === 'function') window.__odApplyRyd();
@@ -844,13 +874,24 @@ export function buildYouTubePowerUpScript(
           }
         }
 
-        const canBack = (window.navigation && typeof window.navigation.canGoBack === 'boolean')
+        const hasNavBack = (window.navigation && typeof window.navigation.canGoBack === 'boolean')
           ? window.navigation.canGoBack
           : (window.history.length > 1);
-        backBtn.disabled = !canBack;
-        backBtn.style.opacity = canBack ? '0.92' : '0.28';
-        backBtn.style.cursor = canBack ? 'pointer' : 'default';
-        backBtn.title = canBack ? 'Back one step in YouTube (Alt+Left)' : 'No previous YouTube page';
+        const canStepBack = hasNavBack || location.pathname !== '/';
+
+        backBtn.dataset.idleBg = idleBg;
+        backBtn.dataset.hoverBg = hoverBg;
+        backBtn.style.color = fg;
+        backBtn.style.background = idleBg;
+        backBtn.style.border = '1px solid ' + borderClr;
+        backBtn.querySelectorAll('path').forEach((p) => p.setAttribute('stroke', fg));
+
+        backBtn.disabled = !canStepBack;
+        backBtn.style.opacity = canStepBack ? '1' : '0.45';
+        backBtn.style.cursor = canStepBack ? 'pointer' : 'default';
+        backBtn.title = hasNavBack
+          ? 'Back one step in YouTube (Alt+Left)'
+          : (location.pathname !== '/' ? 'Back to YouTube Home' : 'YouTube Home');
       };
 
       const syncYtUiHooks = () => {

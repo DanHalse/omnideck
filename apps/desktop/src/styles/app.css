@@ -414,9 +414,17 @@
 }
 
 .icon-btn:disabled {
-  opacity: 0.32;
+  opacity: 0.42;
   cursor: default;
   pointer-events: none;
+}
+
+.icon-btn--nav-back {
+  width: 26px;
+  height: 26px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  color: var(--ink-primary);
 }
 
 .icon-btn--active {
