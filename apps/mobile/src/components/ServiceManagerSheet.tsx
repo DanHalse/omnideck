@@ -13,16 +13,20 @@ import {
 import {
   APP_VERSION,
   GITHUB_RELEASES_URL,
-  GITHUB_REPO_NAME,
-  GITHUB_REPO_OWNER,
   normalizeServiceUrl,
   type CustomServiceInput,
+  type PowerUpsConfig,
   type ServiceDefinition,
   type ThemeMode,
   type WorkspacePreset,
 } from '@omnideck/shared';
 import type { MobilePalette } from '../theme';
 import { ServiceSvgIcon } from './ServiceSvgIcon';
+import {
+  type MobileUpdateInfo,
+  type OtaRuntimeState,
+  resetOtaBundle,
+} from '../otaUpdater';
 
 interface ServiceManagerSheetProps {
   visible: boolean;
@@ -32,10 +36,19 @@ interface ServiceManagerSheetProps {
   workspaces: WorkspacePreset[];
   activeWorkspaceId: string;
   sleepTimerMinutes: number;
+  powerUps: PowerUpsConfig;
+  otaState: OtaRuntimeState | null;
+  updateInfo: MobileUpdateInfo | null;
+  updateBusy: boolean;
+  updateProgress: number;
+  updateStatusText: string;
   onClose: () => void;
   onToggleTheme: () => void;
   onSleepInactive: () => void;
   onSetSleepTimer: (minutes: number) => void;
+  onTogglePowerUp: (key: keyof PowerUpsConfig) => void;
+  onCheckUpdates: () => Promise<void>;
+  onInstallUpdate: () => Promise<void>;
   onApplyWorkspace: (workspaceId: string) => void;
   onReorder: (fromIndex: number, toIndex: number) => void;
   onToggleVisibility: (id: string) => void;
@@ -45,6 +58,17 @@ interface ServiceManagerSheetProps {
   onImportSyncJson: (rawJson: string) => void;
 }
 
+const MOBILE_POWER_UP_ITEMS: Array<{ key: keyof PowerUpsConfig; label: string }> = [
+  { key: 'youtubeReturnDislikes', label: 'YT Dislikes' },
+  { key: 'youtubeSponsorBlock', label: 'SponsorBlock' },
+  { key: 'youtubeHideShorts', label: 'Hide Shorts' },
+  { key: 'youtubeHideEndScreens', label: 'No End Cards' },
+  { key: 'youtubeAutoDismissStillListening', label: 'Auto-Dismiss' },
+  { key: 'redditHidePromoted', label: 'No Reddit Ads' },
+  { key: 'redditCollapseAutoMod', label: 'Hide AutoMod' },
+  { key: 'redditNextCommentButton', label: 'Next Comment ↓' },
+];
+
 export function ServiceManagerSheet({
   visible,
   palette,
@@ -53,10 +77,19 @@ export function ServiceManagerSheet({
   workspaces,
   activeWorkspaceId,
   sleepTimerMinutes,
+  powerUps,
+  otaState,
+  updateInfo,
+  updateBusy,
+  updateProgress,
+  updateStatusText,
   onClose,
   onToggleTheme,
   onSleepInactive,
   onSetSleepTimer,
+  onTogglePowerUp,
+  onCheckUpdates,
+  onInstallUpdate,
   onApplyWorkspace,
   onReorder,
   onToggleVisibility,
@@ -71,9 +104,9 @@ export function ServiceManagerSheet({
   const [error, setError] = useState<string | null>(null);
   const [syncJson, setSyncJson] = useState('');
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
-  const [updateStatus, setUpdateStatus] = useState<string>(`OmniDeck v${APP_VERSION}`);
 
   const visibleCount = services.filter((s) => !s.hidden).length;
+  const activeVersionLabel = otaState?.activeVersion || APP_VERSION;
 
   const handleAdd = () => {
     setError(null);
@@ -118,36 +151,13 @@ export function ServiceManagerSheet({
     }
   };
 
-  const handleCheckUpdate = async () => {
-    setUpdateStatus('Checking GitHub Releases…');
-    try {
-      const res = await fetch(
-        `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases/latest`,
-      );
-      if (!res.ok) {
-        setUpdateStatus(`OmniDeck v${APP_VERSION} (up to date)`);
-        return;
-      }
-      const data = (await res.json()) as { tag_name?: string; html_url?: string };
-      const latest = (data.tag_name ?? '').replace(/^v/i, '');
-      if (latest && latest !== APP_VERSION) {
-        setUpdateStatus(`New version v${latest} available — opening Releases`);
-        void Linking.openURL(data.html_url || GITHUB_RELEASES_URL);
-      } else {
-        setUpdateStatus(`OmniDeck v${APP_VERSION} is up to date`);
-      }
-    } catch {
-      setUpdateStatus('Could not reach GitHub Releases.');
-    }
-  };
-
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={styles.backdrop}>
         <View style={[styles.sheet, { backgroundColor: palette.chrome, borderColor: palette.border }]}>
           <View style={[styles.header, { borderBottomColor: palette.border }]}>
             <Text style={[styles.headerTitle, { color: palette.inkPrimary }]}>
-              Apps, Workspaces &amp; Sync
+              Apps, Power-Ups &amp; Updates
             </Text>
             <Pressable onPress={onClose} style={styles.closeBtn}>
               <Text style={[styles.closeText, { color: palette.accent }]}>Done</Text>
@@ -177,15 +187,105 @@ export function ServiceManagerSheet({
               </Pressable>
             </View>
 
-            <Pressable
-              onPress={() => void handleCheckUpdate()}
-              style={[styles.actionCard, { backgroundColor: palette.surface, borderColor: palette.border }]}
+            <View
+              style={[
+                styles.actionCard,
+                { backgroundColor: palette.surface, borderColor: palette.border, gap: 6 },
+              ]}
             >
-              <Text style={[styles.actionLabel, { color: palette.inkPrimary }]}>
-                Check for Updates
-              </Text>
-              <Text style={[styles.actionSub, { color: palette.inkSecondary }]}>{updateStatus}</Text>
-            </Pressable>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.actionLabel, { color: palette.inkPrimary }]}>
+                    OmniDeck v{activeVersionLabel}
+                    {otaState?.isRunningOta ? ' · OTA' : ''}
+                  </Text>
+                  <Text style={[styles.actionSub, { color: palette.inkSecondary }]}>
+                    {updateBusy && updateProgress > 0
+                      ? `${updateStatusText} (${updateProgress}%)`
+                      : updateStatusText}
+                  </Text>
+                </View>
+
+                <Pressable
+                  disabled={updateBusy}
+                  onPress={() =>
+                    void (updateInfo?.available ? onInstallUpdate() : onCheckUpdates())
+                  }
+                  style={[
+                    styles.wsChip,
+                    {
+                      backgroundColor: updateInfo?.available ? palette.accent : palette.chromeElevated,
+                      borderColor: palette.border,
+                      opacity: updateBusy ? 0.6 : 1,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={{
+                      color: updateInfo?.available ? '#FFFFFF' : palette.inkPrimary,
+                      fontSize: 12,
+                      fontWeight: '700',
+                    }}
+                  >
+                    {updateBusy
+                      ? `${updateProgress}%`
+                      : updateInfo?.available
+                        ? updateInfo.mode === 'ota'
+                          ? 'Instant Update'
+                          : 'Install Update'
+                        : 'Check Now'}
+                  </Text>
+                </Pressable>
+              </View>
+
+              <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+                <Pressable onPress={() => void Linking.openURL(updateInfo?.releaseUrl || GITHUB_RELEASES_URL)}>
+                  <Text style={{ color: palette.accent, fontSize: 11.5, fontWeight: '600' }}>
+                    Release Notes
+                  </Text>
+                </Pressable>
+                {otaState?.isRunningOta && (
+                  <Pressable onPress={() => void resetOtaBundle()}>
+                    <Text style={{ color: palette.danger, fontSize: 11.5, fontWeight: '600' }}>
+                      Reset to Built-in v{otaState.embeddedVersion}
+                    </Text>
+                  </Pressable>
+                )}
+              </View>
+            </View>
+
+            <Text style={[styles.sectionTitle, { color: palette.inkMuted }]}>
+              POWER-UPS (YOUTUBE, REDDIT &amp; MUSIC)
+            </Text>
+            <View style={styles.wsWrap}>
+              {MOBILE_POWER_UP_ITEMS.map((item) => {
+                const enabled = Boolean(powerUps[item.key]);
+                return (
+                  <Pressable
+                    key={item.key}
+                    onPress={() => onTogglePowerUp(item.key)}
+                    style={[
+                      styles.wsChip,
+                      {
+                        backgroundColor: enabled ? palette.accentSoft : palette.surface,
+                        borderColor: enabled ? palette.accent : palette.border,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={{
+                        color: enabled ? palette.accent : palette.inkSecondary,
+                        fontSize: 12,
+                        fontWeight: '600',
+                      }}
+                    >
+                      {enabled ? '✓ ' : ''}
+                      {item.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
 
             <Text style={[styles.sectionTitle, { color: palette.inkMuted }]}>
               SLEEP TIMER {sleepTimerMinutes > 0 ? `(ACTIVE · ${sleepTimerMinutes}m)` : ''}

@@ -13,7 +13,7 @@ import {
 
 const CACHE_PREFIX = 'omnideck:mobile-music-cache:v1:';
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const USER_AGENT = 'OmniDeck-Android/1.4.0 (https://github.com/DanHalse/omnideck)';
+const USER_AGENT = 'OmniDeck-Android/1.5.9 (https://github.com/DanHalse/omnideck)';
 
 async function fetchJson<T>(
   url: string,
@@ -193,21 +193,39 @@ async function fetchLyrics(
   albumName?: string,
 ): Promise<SyncedLyricsResult> {
   if (!trackTitle) return { synced: false, lines: [], plainText: '', source: 'none' };
-  const params = new URLSearchParams({ track_name: trackTitle });
+  const strippedTrack = trackTitle
+    .replace(/\s*[\(\[][^\)\]]*(remaster|live|feat|ft\.|official|audio|video|deluxe|version|edit|radio|mono|stereo)[^\)\]]*[\)\]]/gi, '')
+    .replace(/\s+-\s+(remaster(ed)?|live|single|radio edit|acoustic).*$/i, '')
+    .trim();
+
+  const params = new URLSearchParams({ track_name: strippedTrack || trackTitle });
   if (artistName) params.set('artist_name', artistName);
   if (albumName) params.set('album_name', albumName);
 
   let rec = await fetchJson<{ syncedLyrics?: string | null; plainLyrics?: string | null }>(
     `https://lrclib.net/api/get?${params.toString()}`,
-    { timeoutMs: 4500 },
+    { timeoutMs: 5000 },
   );
+
   if (!rec || (!rec.syncedLyrics && !rec.plainLyrics)) {
-    const list = await fetchJson<Array<{ syncedLyrics?: string | null; plainLyrics?: string | null }>>(
-      `https://lrclib.net/api/search?q=${encodeURIComponent(`${artistName} ${trackTitle}`.trim())}`,
-      { timeoutMs: 4500 },
+    const queries = Array.from(
+      new Set(
+        [
+          `${artistName} ${strippedTrack || trackTitle}`.trim(),
+          `${artistName} ${trackTitle}`.trim(),
+          strippedTrack && strippedTrack !== trackTitle ? strippedTrack : '',
+        ].filter(Boolean),
+      ),
     );
-    if (Array.isArray(list) && list.length > 0) {
-      rec = list.find((i) => Boolean(i.syncedLyrics)) ?? list[0];
+    for (const q of queries) {
+      const list = await fetchJson<Array<{ syncedLyrics?: string | null; plainLyrics?: string | null }>>(
+        `https://lrclib.net/api/search?q=${encodeURIComponent(q)}`,
+        { timeoutMs: 5000 },
+      );
+      if (Array.isArray(list) && list.length > 0) {
+        rec = list.find((i) => Boolean(i.syncedLyrics)) ?? list.find((i) => Boolean(i.plainLyrics)) ?? list[0];
+        if (rec?.syncedLyrics || rec?.plainLyrics) break;
+      }
     }
   }
   if (!rec) return { synced: false, lines: [], plainText: '', source: 'none' };
@@ -237,7 +255,8 @@ export async function fetchMobileArtistDossier(input: {
     const raw = await AsyncStorage.getItem(`${CACHE_PREFIX}${queryKey}`);
     if (raw) {
       const parsed = JSON.parse(raw) as ArtistDossier;
-      if (Date.now() - parsed.fetchedAt < CACHE_TTL_MS) {
+      const hasLyrics = Boolean(parsed.lyrics && (parsed.lyrics.lines.length > 0 || parsed.lyrics.plainText));
+      if (Date.now() - parsed.fetchedAt < CACHE_TTL_MS && hasLyrics) {
         return { ...parsed, serviceId: input.serviceId, artworkUrl: input.artworkUrl || parsed.artworkUrl };
       }
     }

@@ -2,7 +2,7 @@
   "expo": {
     "name": "OmniDeck",
     "slug": "omnideck-mobile",
-    "version": "1.4.1",
+    "version": "1.5.9",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -13,7 +13,7 @@
     },
     "android": {
       "package": "dev.omnideck.mobile",
-      "versionCode": 2,
+      "versionCode": 3,
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#0D0F12"
@@ -23,11 +23,13 @@
         "WAKE_LOCK",
         "MODIFY_AUDIO_SETTINGS",
         "FOREGROUND_SERVICE",
-        "FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+        "FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+        "REQUEST_INSTALL_PACKAGES"
       ]
     },
     "plugins": [
-      "./plugins/withAndroidDrmWebView"
+      "./plugins/withAndroidDrmWebView",
+      "./plugins/withAndroidSelfUpdater"
     ]
   }
 }

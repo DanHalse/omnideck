@@ -1,6 +1,6 @@
 {
   "name": "@omnideck/mobile",
-  "version": "1.4.1",
+  "version": "1.5.9",
   "private": true,
   "description": "OmniDeck Android — Persistent multi-WebView media hub with Widevine DRM support",
   "main": "index.ts",

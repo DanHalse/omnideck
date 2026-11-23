@@ -184,8 +184,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  backBtn: {
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
   btnDisabled: {
-    opacity: 0.32,
+    opacity: 0.36,
   },
   btnGlyph: {
     fontSize: 22,

@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import WebView, {
   type WebViewMessageEvent,
@@ -7,6 +7,7 @@ import WebView, {
 import {
   buildMobilePowerUpsScript,
   DESKTOP_LINUX_CHROME_UA,
+  extractYouTubeVideoId,
   matchServiceForUrl,
   MOBILE_ANDROID_CHROME_UA,
   rewriteUrlForPowerUps,
@@ -16,6 +17,12 @@ import {
 import type { MobilePalette } from '../theme';
 import type { MobileNowPlaying } from './ArtistHubSheet';
 import { ServiceSvgIcon } from './ServiceSvgIcon';
+import {
+  buildMobileDislikesInjectScript,
+  buildMobileSponsorInjectScript,
+  fetchMobileSponsorSegments,
+  fetchMobileYouTubeDislikes,
+} from '../mobileEnricher';
 
 export interface WebViewHandle {
   goBack: () => void;
@@ -117,7 +124,12 @@ function isBlockedAppHijackUrl(rawUrl: string): boolean {
 }
 
 function buildMobileMediaBridgeScript(serviceId: string): string {
-  if (serviceId !== 'youtube-music' && serviceId !== 'spotify' && serviceId !== 'audible') {
+  if (
+    serviceId !== 'youtube-music' &&
+    serviceId !== 'spotify' &&
+    serviceId !== 'audible' &&
+    serviceId !== 'youtube'
+  ) {
     return 'true;';
   }
   return `
@@ -126,28 +138,96 @@ function buildMobileMediaBridgeScript(serviceId: string): string {
       window.__omnideckMobileMediaBridge = true;
       const sid = ${JSON.stringify(serviceId)};
       let lastSig = '';
+      let lastVid = '';
       const emit = () => {
         try {
           if (!window.ReactNativeWebView || !window.ReactNativeWebView.postMessage) return;
+          const host = (location.hostname || '').toLowerCase();
+
+          // Notify RN on SPA video ID transitions (m.youtube.com / www.youtube.com / music.youtube.com)
+          if (sid === 'youtube' || sid === 'youtube-music') {
+            const vParam = new URLSearchParams(location.search).get('v') || '';
+            const shortMatch = location.pathname.match(/^\\/shorts\\/([a-zA-Z0-9_-]{11})/);
+            const curVid = vParam || (shortMatch ? shortMatch[1] : '');
+            if (curVid && curVid !== lastVid) {
+              lastVid = curVid;
+              window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: 'yt-video-id',
+                serviceId: sid,
+                videoId: curVid
+              }));
+            }
+          }
+
+          const mainYtVideo =
+            (host.includes('youtube.com') && document.querySelector('video.html5-main-video')) || null;
           const mediaEls = Array.from(document.querySelectorAll('video, audio'));
           const activeEl =
+            (mainYtVideo && Number.isFinite(mainYtVideo.duration) && mainYtVideo.duration > 0 ? mainYtVideo : null) ||
             mediaEls.find((m) => !m.paused && Number.isFinite(m.duration) && m.duration > 0) ||
-            mediaEls.find((m) => Number.isFinite(m.duration) && m.duration > 0 && m.currentTime > 0);
-          const playing = Boolean(activeEl && !activeEl.paused);
-          const currentTimeSec = activeEl ? Math.max(0, Number(activeEl.currentTime) || 0) : undefined;
-          const durationSec = activeEl && Number.isFinite(activeEl.duration) ? Number(activeEl.duration) : undefined;
+            mediaEls.find((m) => Number.isFinite(m.duration) && m.duration > 0 && m.currentTime > 0) ||
+            mediaEls.find((m) => Number.isFinite(m.duration) && m.duration > 0);
+          const playing = Boolean(activeEl && !activeEl.paused && !activeEl.ended);
+          let currentTimeSec = activeEl ? Math.max(0, Number(activeEl.currentTime) || 0) : undefined;
+          let durationSec = activeEl && Number.isFinite(activeEl.duration) ? Number(activeEl.duration) : undefined;
+
+          // Scrape DOM fallbacks for YouTube Music & Spotify so artwork/artist/lyrics never go blank
+          let domTitle = '';
+          let domArtist = '';
+          let domAlbum = '';
+          let domArtwork = '';
+          if (host.includes('music.youtube.com')) {
+            const bar = document.querySelector('ytmusic-player-bar');
+            if (bar) {
+              const tEl = bar.querySelector('.title.ytmusic-player-bar, yt-formatted-string.title');
+              if (tEl && tEl.textContent) domTitle = tEl.textContent.trim();
+              const bEl = bar.querySelector('.byline.ytmusic-player-bar, yt-formatted-string.byline');
+              if (bEl) {
+                const links = Array.from(bEl.querySelectorAll('a'));
+                if (links.length > 0 && links[0].textContent) domArtist = links[0].textContent.trim();
+                else if (bEl.textContent) domArtist = bEl.textContent.split(/[•·]/)[0].trim();
+                if (links.length > 1 && links[1].textContent) domAlbum = links[1].textContent.trim();
+              }
+              const img =
+                bar.querySelector('img.image.ytmusic-player-bar') ||
+                bar.querySelector('.thumbnail-image-wrapper img') ||
+                bar.querySelector('img[src^="http"]');
+              if (img && typeof img.src === 'string' && img.src.startsWith('http')) {
+                domArtwork = img.src;
+              }
+            }
+          } else if (host.includes('spotify.com')) {
+            const parseClock = (txt) => {
+              if (!txt) return undefined;
+              const parts = txt.trim().split(':').map((n) => parseInt(n, 10));
+              if (parts.some((n) => Number.isNaN(n))) return undefined;
+              return parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2] : parts[0] * 60 + (parts[1] || 0);
+            };
+            const posEl = document.querySelector('[data-testid="playback-position"]');
+            const durEl = document.querySelector('[data-testid="playback-duration"]');
+            if (posEl && typeof currentTimeSec !== 'number') currentTimeSec = parseClock(posEl.textContent);
+            if (durEl && typeof durationSec !== 'number') durationSec = parseClock(durEl.textContent);
+          }
+
+          if (sid === 'youtube' && !playing) return;
 
           const ms = navigator.mediaSession && navigator.mediaSession.metadata;
-          const title = (ms && ms.title ? String(ms.title).trim() : '') || (playing ? String(document.title || '').trim() : '');
-          const artist = ms && ms.artist ? String(ms.artist).trim() : '';
-          const album = ms && ms.album ? String(ms.album).trim() : '';
-          let artworkUrl = '';
+          const msTitle = ms && ms.title ? String(ms.title).trim() : '';
+          const msArtist = ms && ms.artist ? String(ms.artist).trim() : '';
+          const msAlbum = ms && ms.album ? String(ms.album).trim() : '';
+          let msArtwork = '';
           if (ms && Array.isArray(ms.artwork) && ms.artwork.length > 0) {
             const best = ms.artwork[ms.artwork.length - 1] || ms.artwork[0];
-            if (best && typeof best.src === 'string') artworkUrl = best.src;
+            if (best && typeof best.src === 'string') msArtwork = best.src;
           }
+
+          const title = domTitle || msTitle || (playing ? String(document.title || '').replace(/\\s*-\\s*YouTube( Music)?$/i, '').trim() : '');
+          const artist = domArtist || msArtist;
+          const album = domAlbum || msAlbum;
+          const artworkUrl = domArtwork || msArtwork;
+
           if (!title) return;
-          const sig = [title, artist, playing ? '1' : '0', Math.floor(currentTimeSec || 0)].join('|');
+          const sig = [title, artist, artworkUrl, playing ? '1' : '0', Math.floor(currentTimeSec || 0), Math.floor(durationSec || 0)].join('|');
           if (sig === lastSig) return;
           lastSig = sig;
           window.ReactNativeWebView.postMessage(JSON.stringify({
@@ -163,9 +243,10 @@ function buildMobileMediaBridgeScript(serviceId: string): string {
           }));
         } catch {}
       };
-      setInterval(emit, 1500);
+      setInterval(emit, 1000);
       document.addEventListener('play', emit, true);
       document.addEventListener('pause', emit, true);
+      emit();
     })();
     true;
   `;
@@ -174,7 +255,8 @@ function buildMobileMediaBridgeScript(serviceId: string): string {
 /**
  * Keeps every visited service's native Android WebView mounted in a z-indexed stack
  * instead of unmounting on tab change — delivering instant swaps, shared persistent cookies,
- * uninterrupted background audio playback, Smart Link Routing, live MediaSession sync, and Power-Ups.
+ * uninterrupted background audio playback, Smart Link Routing, live MediaSession/DOM sync,
+ * Return YouTube Dislike, SponsorBlock, and Power-Ups.
  */
 export function ServiceWebViewStack({
   palette,
@@ -194,16 +276,50 @@ export function ServiceWebViewStack({
   onRouteServiceUrl,
   onWakeService,
 }: ServiceWebViewStackProps) {
-  // Apply live mute changes to already-mounted WebViews
+  const lastEnrichedVidRef = useRef<Record<string, string>>({});
+
+  const enrichYouTubeVideo = (serviceId: string, videoId: string) => {
+    if (!videoId || (serviceId !== 'youtube' && serviceId !== 'youtube-music')) return;
+    const key = `${serviceId}:${videoId}`;
+    if (lastEnrichedVidRef.current[serviceId] === key) return;
+    lastEnrichedVidRef.current[serviceId] = key;
+
+    if (serviceId === 'youtube' && powerUps.youtubeReturnDislikes) {
+      void fetchMobileYouTubeDislikes(videoId).then((stats) => {
+        if (!stats || lastEnrichedVidRef.current[serviceId] !== key) return;
+        const inject = () => {
+          const ref = webViewRefs.current[serviceId];
+          if (ref && lastEnrichedVidRef.current[serviceId] === key) {
+            ref.injectJavaScript(buildMobileDislikesInjectScript(stats));
+          }
+        };
+        inject();
+        setTimeout(inject, 900);
+      });
+    }
+
+    if (powerUps.youtubeSponsorBlock) {
+      void fetchMobileSponsorSegments(videoId, serviceId === 'youtube-music').then((segments) => {
+        if (lastEnrichedVidRef.current[serviceId] !== key) return;
+        const ref = webViewRefs.current[serviceId];
+        if (ref) {
+          ref.injectJavaScript(buildMobileSponsorInjectScript(videoId, segments));
+        }
+      });
+    }
+  };
+
+  // Apply live mute & power-up changes to already-mounted WebViews
   useEffect(() => {
     for (const svc of services) {
       if (!mountedIds.has(svc.id) || hibernatedIds.has(svc.id)) continue;
       const ref = webViewRefs.current[svc.id];
       if (ref) {
         ref.injectJavaScript(buildMuteScript(mutedIds.has(svc.id)));
+        ref.injectJavaScript(buildMobilePowerUpsScript(svc.id, powerUps));
       }
     }
-  }, [services, mountedIds, hibernatedIds, mutedIds, webViewRefs]);
+  }, [services, mountedIds, hibernatedIds, mutedIds, powerUps, webViewRefs]);
 
   return (
     <View style={[styles.stage, { backgroundColor: palette.canvas }]}>
@@ -283,6 +399,7 @@ export function ServiceWebViewStack({
                   const data = JSON.parse(ev.nativeEvent.data) as {
                     type?: string;
                     serviceId?: string;
+                    videoId?: string;
                     title?: string;
                     artist?: string;
                     album?: string;
@@ -291,7 +408,9 @@ export function ServiceWebViewStack({
                     currentTimeSec?: number;
                     durationSec?: number;
                   };
-                  if (data.type === 'media-meta' && data.serviceId && data.title) {
+                  if (data.type === 'yt-video-id' && data.serviceId && data.videoId) {
+                    enrichYouTubeVideo(data.serviceId, data.videoId);
+                  } else if (data.type === 'media-meta' && data.serviceId && data.title) {
                     onMediaMeta({
                       serviceId: data.serviceId,
                       title: data.title,
@@ -321,12 +440,17 @@ export function ServiceWebViewStack({
                 return true;
               }}
               onNavigationStateChange={(nav: WebViewNavigation): void => {
+                const navUrl = nav.url || targetUri;
                 onNavStateChange(svc.id, {
                   canGoBack: nav.canGoBack,
                   canGoForward: nav.canGoForward,
                   loading: nav.loading,
-                  url: nav.url || targetUri,
+                  url: navUrl,
                 });
+                if (svc.id === 'youtube' || svc.id === 'youtube-music') {
+                  const vid = extractYouTubeVideoId(navUrl);
+                  if (vid) enrichYouTubeVideo(svc.id, vid);
+                }
               }}
               onLoadEnd={(): void => {
                 const ref = webViewRefs.current[svc.id];

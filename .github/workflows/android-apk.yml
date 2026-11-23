@@ -51,10 +51,11 @@ jobs:
         working-directory: apps/mobile/android
         run: ./gradlew assembleRelease --no-daemon
 
-      - name: Stage Named APK
+      - name: Stage Named APK & Instant OTA Bundle
         id: stage
         run: |
           VERSION=$(node -p "require('./apps/mobile/package.json').version")
+          RUNTIME_VERSION=$(node -e "const fs = require('node:fs'); const m = fs.readFileSync('apps/mobile/plugins/withAndroidSelfUpdater.js','utf8').match(/OTA_RUNTIME_VERSION\\s*=\\s*'([^']+)'/); console.log(m ? m[1] : '1');")
           TAG="${{ github.event.inputs.release_tag }}"
           if [ -z "$TAG" ]; then
             if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
@@ -64,26 +65,52 @@ jobs:
             fi
           fi
           APK_NAME="OmniDeck-Android-${VERSION}.apk"
+          OTA_BUNDLE="omnideck-mobile-ota.bundle"
+          OTA_MANIFEST="omnideck-mobile-ota.json"
           mkdir -p apps/mobile/release
           cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk "apps/mobile/release/${APK_NAME}"
-          ls -lh "apps/mobile/release/${APK_NAME}"
+
+          # Extract exact compiled Hermes JS bundle directly from the release APK for zero-APK OTA self-updates
+          unzip -p "apps/mobile/release/${APK_NAME}" assets/index.android.bundle > "apps/mobile/release/${OTA_BUNDLE}"
+          SHA256=$(sha256sum "apps/mobile/release/${OTA_BUNDLE}" | awk '{print $1}')
+          SIZE=$(wc -c < "apps/mobile/release/${OTA_BUNDLE}" | tr -d ' ')
+          PUBLISHED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          node -e "
+            const fs = require('node:fs');
+            const manifest = {
+              version: process.env.V,
+              runtimeVersion: process.env.RV,
+              bundleAssetName: process.env.BN,
+              bundleSha256: process.env.SHA,
+              bundleSizeBytes: Number(process.env.SZ),
+              apkAssetName: process.env.APK,
+              publishedAt: process.env.TS,
+            };
+            fs.writeFileSync('apps/mobile/release/' + process.env.MN, JSON.stringify(manifest, null, 2) + '\n');
+          " V="${VERSION}" RV="${RUNTIME_VERSION}" BN="${OTA_BUNDLE}" SHA="${SHA256}" SZ="${SIZE}" APK="${APK_NAME}" TS="${PUBLISHED_AT}" MN="${OTA_MANIFEST}"
+
+          ls -lh apps/mobile/release/
+          cat "apps/mobile/release/${OTA_MANIFEST}"
           echo "apk_name=${APK_NAME}" >> "$GITHUB_OUTPUT"
           echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
 
-      - name: Upload APK Workflow Artifact
+      - name: Upload APK & OTA Workflow Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: omnideck-android-apk
-          path: apps/mobile/release/*.apk
+          path: apps/mobile/release/*
 
-      - name: Attach APK to GitHub Release
+      - name: Attach APK & OTA Bundle to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.stage.outputs.release_tag }}"
           APK="apps/mobile/release/${{ steps.stage.outputs.apk_name }}"
+          OTA_BUNDLE="apps/mobile/release/omnideck-mobile-ota.bundle"
+          OTA_MANIFEST="apps/mobile/release/omnideck-mobile-ota.json"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$APK" --clobber
+            gh release upload "$TAG" "$APK" "$OTA_BUNDLE" "$OTA_MANIFEST" --clobber
           else
-            gh release create "$TAG" "$APK" --title "OmniDeck ${TAG}" --notes "Includes standalone Android APK (${{ steps.stage.outputs.apk_name }})."
+            gh release create "$TAG" "$APK" "$OTA_BUNDLE" "$OTA_MANIFEST" --title "OmniDeck ${TAG}" --notes "Includes standalone Android APK (${{ steps.stage.outputs.apk_name }}) and instant zero-APK OTA update bundle."
           fi
