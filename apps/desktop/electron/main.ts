@@ -67,6 +67,7 @@ import type { UiCommandEvent } from './ipcTypes.js';
 
 app.setName('OmniDeck');
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+app.commandLine.appendSwitch('audio-buffer-size', '2048');
 if (process.platform === 'linux') {
   app.commandLine.appendSwitch('ozone-platform-hint', 'auto');
 }

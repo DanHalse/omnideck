@@ -408,28 +408,56 @@ export function buildYouTubePowerUpScript(
 
       document.addEventListener('timeupdate', checkSponsorAndLoop, true);
 
-      // Remember preferred YouTube playback speed across videos
+      // Remember preferred YouTube playback speed across videos (main player only, preserving pitch)
       const SPEED_KEY = '__omnideck_yt_speed';
+      const isStandardSpeedStep = (r) => {
+        if (!Number.isFinite(r) || r < 0.25 || r > 4) return false;
+        return Math.abs(r * 100 - Math.round(r * 100)) < 0.05 && (
+          Math.abs(r * 4 - Math.round(r * 4)) < 0.01 ||
+          Math.abs(r * 10 - Math.round(r * 10)) < 0.01
+        );
+      };
       const applySavedSpeed = (v) => {
         if (!window.__odYtCfg.rememberSpeed || !v) return;
+        if (!v.classList || !v.classList.contains('html5-main-video')) return;
         try {
+          if (typeof v.preservesPitch === 'boolean') v.preservesPitch = true;
+          if (typeof v.webkitPreservesPitch === 'boolean') v.webkitPreservesPitch = true;
           const saved = Number(localStorage.getItem(SPEED_KEY));
-          if (Number.isFinite(saved) && saved >= 0.25 && saved <= 4 && Math.abs(v.playbackRate - saved) > 0.01) {
+          if (!isStandardSpeedStep(saved) || (Math.abs(saved - 1) > 0.01 && Math.abs(saved - 1) < 0.09)) {
+            if (localStorage.getItem(SPEED_KEY) !== null) localStorage.removeItem(SPEED_KEY);
+            return;
+          }
+          if (Math.abs(saved - 1) > 0.01 && Math.abs(v.playbackRate - saved) > 0.01) {
             v.playbackRate = saved;
           }
         } catch {}
       };
+      let speedSaveTimer = null;
       document.addEventListener('ratechange', (ev) => {
         if (!window.__odYtCfg.rememberSpeed) return;
         const v = ev && ev.target;
-        if (v && v.tagName === 'VIDEO' && Number.isFinite(v.playbackRate) && v.playbackRate >= 0.25 && v.playbackRate <= 4) {
-          try { localStorage.setItem(SPEED_KEY, String(v.playbackRate)); } catch {}
+        if (!v || v.tagName !== 'VIDEO' || !v.classList || !v.classList.contains('html5-main-video')) return;
+        const r = v.playbackRate;
+        if (!isStandardSpeedStep(r)) return;
+        // Ignore YouTube live DVR micro catch-up rates (e.g. 1.03x / 1.05x) unless explicitly set via Shift+Wheel
+        if (Math.abs(r - 1) > 0.01 && Math.abs(r - 1) < 0.09 && (!window.__odWheelSpeedAt || Date.now() - window.__odWheelSpeedAt > 1500)) {
+          return;
         }
+        if (speedSaveTimer) clearTimeout(speedSaveTimer);
+        speedSaveTimer = setTimeout(() => {
+          try {
+            if (Math.abs(v.playbackRate - r) < 0.01) {
+              localStorage.setItem(SPEED_KEY, String(r));
+            }
+          } catch {}
+        }, 1200);
       }, true);
       document.addEventListener('loadedmetadata', (ev) => {
-        if (ev && ev.target && ev.target.tagName === 'VIDEO') {
+        const v = ev && ev.target;
+        if (v && v.tagName === 'VIDEO' && v.classList && v.classList.contains('html5-main-video')) {
           window.__odAbLoop = { a: null, b: null };
-          applySavedSpeed(ev.target);
+          applySavedSpeed(v);
         }
       }, true);
 
@@ -501,6 +529,9 @@ export function buildYouTubePowerUpScript(
         ev.preventDefault();
         const delta = ev.deltaY < 0 ? 0.1 : -0.1;
         const next = Math.min(4.0, Math.max(0.25, Math.round((v.playbackRate + delta) * 10) / 10));
+        window.__odWheelSpeedAt = Date.now();
+        if (typeof v.preservesPitch === 'boolean') v.preservesPitch = true;
+        if (typeof v.webkitPreservesPitch === 'boolean') v.webkitPreservesPitch = true;
         v.playbackRate = next;
         showMiniToast('Speed ' + next.toFixed(1) + 'x');
       }, { passive: false, capture: true });

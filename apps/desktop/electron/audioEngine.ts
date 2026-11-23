@@ -35,8 +35,14 @@ export function buildEqualizerScript(eq: EqualizerConfig): string {
       try {
         if (!state || !state.ctx) return;
         const now = state.ctx.currentTime;
+        const active = isGraphNeeded();
+        if (state.dryGain && state.wetGain) {
+          state.dryGain.gain.setTargetAtTime(active ? 0.0 : 1.0, now, 0.02);
+          state.wetGain.gain.setTargetAtTime(active ? 1.0 : 0.0, now, 0.02);
+        }
+
         const eqPreamp = cfg.enabled ? dbToGain(cfg.preampDb) : 1.0;
-        const compMakeup = cfg.compressorEnabled ? 1.45 : 1.0;
+        const compMakeup = cfg.compressorEnabled ? 1.18 : 1.0;
         const boost = cfg.volumeBoost || 1.0;
         state.preamp.gain.setTargetAtTime(eqPreamp, now, 0.025);
         state.outputGain.gain.setTargetAtTime(Math.min(3.0, compMakeup * boost), now, 0.025);
@@ -47,17 +53,17 @@ export function buildEqualizerScript(eq: EqualizerConfig): string {
         }
 
         if (cfg.compressorEnabled) {
-          state.limiter.threshold.setTargetAtTime(-24, now, 0.025);
-          state.limiter.knee.setTargetAtTime(24, now, 0.025);
-          state.limiter.ratio.setTargetAtTime(10, now, 0.025);
-          state.limiter.attack.setTargetAtTime(0.003, now, 0.025);
-          state.limiter.release.setTargetAtTime(0.22, now, 0.025);
+          state.limiter.threshold.setTargetAtTime(-16, now, 0.025);
+          state.limiter.knee.setTargetAtTime(18, now, 0.025);
+          state.limiter.ratio.setTargetAtTime(4, now, 0.025);
+          state.limiter.attack.setTargetAtTime(0.012, now, 0.025);
+          state.limiter.release.setTargetAtTime(0.26, now, 0.025);
         } else {
-          state.limiter.threshold.setTargetAtTime(-1.5, now, 0.025);
-          state.limiter.knee.setTargetAtTime(6, now, 0.025);
-          state.limiter.ratio.setTargetAtTime(8, now, 0.025);
-          state.limiter.attack.setTargetAtTime(0.003, now, 0.025);
-          state.limiter.release.setTargetAtTime(0.15, now, 0.025);
+          state.limiter.threshold.setTargetAtTime(-0.5, now, 0.025);
+          state.limiter.knee.setTargetAtTime(3, now, 0.025);
+          state.limiter.ratio.setTargetAtTime(2, now, 0.025);
+          state.limiter.attack.setTargetAtTime(0.01, now, 0.025);
+          state.limiter.release.setTargetAtTime(0.18, now, 0.025);
         }
 
         if (state.ctx.state === 'suspended') {
@@ -86,10 +92,19 @@ export function buildEqualizerScript(eq: EqualizerConfig): string {
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
         if (!AudioCtx) return;
 
-        const ctx = window.__omnideckEqCtx || new AudioCtx();
-        window.__omnideckEqCtx = ctx;
+        let ctx = window.__omnideckEqCtx;
+        if (!ctx) {
+          try {
+            ctx = new AudioCtx({ latencyHint: 'playback' });
+          } catch {
+            ctx = new AudioCtx();
+          }
+          window.__omnideckEqCtx = ctx;
+        }
 
         const source = ctx.createMediaElementSource(el);
+        const dryGain = ctx.createGain();
+        const wetGain = ctx.createGain();
         const preamp = ctx.createGain();
         const filters = FREQS.map((freq, idx) => {
           const f = ctx.createBiquadFilter();
@@ -103,11 +118,14 @@ export function buildEqualizerScript(eq: EqualizerConfig): string {
         const limiter = ctx.createDynamicsCompressor();
         const outputGain = ctx.createGain();
         const safetyClipper = ctx.createDynamicsCompressor();
-        safetyClipper.threshold.value = -0.8;
-        safetyClipper.knee.value = 3;
-        safetyClipper.ratio.value = 16;
-        safetyClipper.attack.value = 0.002;
-        safetyClipper.release.value = 0.1;
+        safetyClipper.threshold.value = -0.5;
+        safetyClipper.knee.value = 2;
+        safetyClipper.ratio.value = 12;
+        safetyClipper.attack.value = 0.003;
+        safetyClipper.release.value = 0.12;
+
+        source.connect(dryGain);
+        dryGain.connect(ctx.destination);
 
         source.connect(preamp);
         let prev = preamp;
@@ -118,9 +136,10 @@ export function buildEqualizerScript(eq: EqualizerConfig): string {
         prev.connect(limiter);
         limiter.connect(outputGain);
         outputGain.connect(safetyClipper);
-        safetyClipper.connect(ctx.destination);
+        safetyClipper.connect(wetGain);
+        wetGain.connect(ctx.destination);
 
-        const state = { ctx, source, preamp, filters, limiter, outputGain, safetyClipper };
+        const state = { ctx, source, dryGain, wetGain, preamp, filters, limiter, outputGain, safetyClipper };
         window.__omnideckEqNodes.set(el, state);
         window.__omnideckEqActiveStates.add(state);
         updateState(state);
