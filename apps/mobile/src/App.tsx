@@ -22,15 +22,17 @@ import {
   parseImportedConfig,
   removeCustomService,
   reorderServices,
+  resolveSkinPreset,
   selectActiveService,
   serializeConfigForExport,
   toggleServiceVisibility,
   type CustomServiceInput,
   type PersistedConfig,
   type PowerUpsConfig,
+  type SkinPresetId,
 } from '@omnideck/shared';
 import { loadMobileConfig, saveMobileConfig } from './storage';
-import { MOBILE_PALETTES } from './theme';
+import { getMobilePalette } from './theme';
 import { TopControlBar } from './components/TopControlBar';
 import { BottomNavBar } from './components/BottomNavBar';
 import {
@@ -49,6 +51,11 @@ import {
   type MobileUpdateInfo,
   type OtaRuntimeState,
 } from './otaUpdater';
+import {
+  pullHandoffFromDesktop,
+  sendHandoffToDesktop,
+  syncWithDesktopOverLan,
+} from './lanSync';
 
 function formatClock(sec?: number): string {
   if (typeof sec !== 'number' || !Number.isFinite(sec) || sec < 0) return '0:00';
@@ -438,7 +445,63 @@ function MobileShell() {
     setManagerOpen(false);
   }, [activeService.id, mountedIds]);
 
-  const palette = MOBILE_PALETTES[config.settings.theme];
+  const handleSelectSkin = useCallback(
+    (skin: SkinPresetId) => {
+      const resolvedTheme = resolveSkinPreset(skin).baseTheme;
+      commitConfig((prev) => ({
+        ...prev,
+        settings: {
+          ...prev.settings,
+          skin,
+          theme: resolvedTheme,
+        },
+      }));
+    },
+    [commitConfig],
+  );
+
+  const handleSyncWithPc = useCallback(
+    async (hostUrl: string, pin: string): Promise<string> => {
+      const result = await syncWithDesktopOverLan(hostUrl, pin, config);
+      commitConfig(() => result.nextConfig);
+      return `Synced with ${result.deviceName} (${result.nextConfig.settings.skin} skin)`;
+    },
+    [config, commitConfig],
+  );
+
+  const handlePullFromPc = useCallback(
+    async (hostUrl: string, pin: string): Promise<string> => {
+      const handoff = await pullHandoffFromDesktop(hostUrl, pin);
+      handleOpenUrlInService(handoff.serviceId, handoff.url);
+      if (typeof handoff.positionSec === 'number' && handoff.positionSec > 3) {
+        const targetSec = handoff.positionSec;
+        const svcId = handoff.serviceId;
+        setTimeout(() => handleSeek(svcId, targetSec), 2800);
+      }
+      return `Continued "${handoff.title || handoff.serviceId}" from PC`;
+    },
+    [handleOpenUrlInService, handleSeek],
+  );
+
+  const handleSendToPc = useCallback(
+    async (hostUrl: string, pin: string): Promise<string> => {
+      const targetServiceId = nowPlaying?.serviceId || activeService.id;
+      const targetUrl =
+        navState[targetServiceId]?.url ||
+        urlOverrides[targetServiceId] ||
+        activeService.url;
+      await sendHandoffToDesktop(hostUrl, pin, {
+        serviceId: targetServiceId,
+        url: targetUrl,
+        title: nowPlaying?.title || activeService.name,
+        positionSec: nowPlaying?.currentTimeSec,
+      });
+      return `Sent ${activeService.shortName} to PC!`;
+    },
+    [activeService, navState, nowPlaying, urlOverrides],
+  );
+
+  const palette = getMobilePalette(config.settings.skin, config.settings.theme);
   const showUpdateBanner = Boolean(
     updateInfo?.available &&
       (!dismissedUpdateVersion || dismissedUpdateVersion !== updateInfo.latestVersion),
@@ -534,6 +597,7 @@ function MobileShell() {
       <View style={styles.stageWrap}>
         <ServiceWebViewStack
           palette={palette}
+          skin={config.settings.skin}
           services={visibleServices}
           allServices={config.services}
           activeServiceId={activeService.id}
@@ -679,6 +743,7 @@ function MobileShell() {
         visible={managerOpen}
         palette={palette}
         theme={config.settings.theme}
+        skin={config.settings.skin}
         services={config.services}
         workspaces={config.workspaces}
         activeWorkspaceId={config.activeWorkspaceId}
@@ -691,19 +756,17 @@ function MobileShell() {
         updateStatusText={updateStatusText}
         onClose={() => setManagerOpen(false)}
         onToggleTheme={() =>
-          commitConfig((prev) => ({
-            ...prev,
-            settings: {
-              ...prev.settings,
-              theme: prev.settings.theme === 'dark' ? 'light' : 'dark',
-            },
-          }))
+          handleSelectSkin(config.settings.theme === 'dark' ? 'daylight' : 'obsidian')
         }
+        onSelectSkin={handleSelectSkin}
         onSleepInactive={handleSleepInactive}
         onSetSleepTimer={handleSetSleepTimer}
         onTogglePowerUp={handleTogglePowerUp}
         onCheckUpdates={() => runUpdateCheck(false)}
         onInstallUpdate={runInstallUpdate}
+        onSyncWithPc={handleSyncWithPc}
+        onPullFromPc={handlePullFromPc}
+        onSendToPc={handleSendToPc}
         onApplyWorkspace={(wsId) =>
           commitConfig((prev) => {
             const next = applyWorkspace(prev, wsId);

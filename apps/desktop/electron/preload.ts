@@ -100,8 +100,18 @@ const api: OmniDeckBridge = {
   updateIntegrations: (patch) => ipcRenderer.invoke('omnideck:update-integrations', patch),
   blockMusic: (input) => ipcRenderer.invoke('omnideck:block-music', input),
   unblockMusic: (entryId) => ipcRenderer.invoke('omnideck:unblock-music', entryId),
+  whitelistArtist: (artistName) => ipcRenderer.invoke('omnideck:whitelist-artist', artistName),
+  removeWhitelistedArtist: (artistName) =>
+    ipcRenderer.invoke('omnideck:remove-whitelisted-artist', artistName),
+  setTwitchMultiStreamChannels: (channels) =>
+    ipcRenderer.invoke('omnideck:set-twitch-multistream', channels),
   addBookNote: (input) => ipcRenderer.invoke('omnideck:add-book-note', input),
   removeBookNote: (noteId) => ipcRenderer.invoke('omnideck:remove-book-note', noteId),
+  audibleDeckControl: (action, value) =>
+    ipcRenderer.invoke('omnideck:audible-deck-control', action, value),
+  lanSyncStart: () => ipcRenderer.invoke('omnideck:lan-sync-start'),
+  lanSyncStop: () => ipcRenderer.invoke('omnideck:lan-sync-stop'),
+  lanSyncRegeneratePin: () => ipcRenderer.invoke('omnideck:lan-sync-regenerate-pin'),
   addCustomService: (input) => ipcRenderer.invoke('omnideck:add-custom-service', input),
   updateService: (serviceId, patch) =>
     ipcRenderer.invoke('omnideck:update-service', serviceId, patch),

@@ -1,5 +1,6 @@
 export type NavPosition = 'top' | 'left';
 export type ThemeMode = 'dark' | 'light';
+export type SkinPresetId = 'obsidian' | 'oled' | 'nord' | 'catppuccin' | 'daylight';
 export type UserAgentMode = 'auto' | 'desktop' | 'mobile';
 export type AppChromeMode = 'zen' | 'classic';
 
@@ -101,8 +102,15 @@ export interface PowerUpsConfig {
   youtubeHideEndScreens: boolean;
   youtubeDisableHoverPreview: boolean;
   youtubePlayerControls: boolean;
+  youtubeStartOnSubscriptions: boolean;
+  youtubeHideWatched: boolean;
+  youtubeQuickThumbActions: boolean;
+  youtubeClassicLayoutLock: boolean;
+  youtubeBlockedChannels: string[];
   ytmAudioOnlyMode: boolean;
   ytmPlaylistQuickFilter: boolean;
+  ytmSmartFadeAndSilenceTrim: boolean;
+  ytmPlaylistSorter: boolean;
 
   // Twitch
   twitchThirdPartyEmotes: boolean;
@@ -111,6 +119,9 @@ export interface PowerUpsConfig {
   twitchPauseChatOnHover: boolean;
   twitchAutoRecover: boolean;
   twitchHideClutter: boolean;
+  twitchEmoteAutocomplete: boolean;
+  twitchChatHighlights: string[];
+  twitchFollowedFirstMobile: boolean;
 
   // Audible
   audibleDirectToLibrary: boolean;
@@ -119,6 +130,8 @@ export interface PowerUpsConfig {
   audibleWhisperSyncFlush: boolean;
   audiblePrecisionSpeed: boolean;
   audibleHideStoreClutter: boolean;
+  audibleDarkMode: boolean;
+  audibleCustomSkipSec: number;
 
   // Reddit (Modern RES)
   redditCompactDensity: boolean;
@@ -131,11 +144,16 @@ export interface PowerUpsConfig {
   redditHoverZoom: boolean;
   redditUserTagger: boolean;
   redditFilteredKeywords: string[];
+  redditColorDepthLines: boolean;
+  redditExactTimestamps: boolean;
+  redditKillVideoScroll: boolean;
 
   // Spotify
   spotifyKeepConnectAlive: boolean;
   spotifyLikeShortcut: string;
   spotifyHidePodcastsAudiobooks: boolean;
+  spotifyGuardSmartShuffle: boolean;
+  spotifyQueueDuration: boolean;
 }
 
 export interface BlockedMusicEntry {
@@ -298,6 +316,8 @@ export interface ListeningStatsSummary {
 export interface AppSettings {
   navPosition: NavPosition;
   theme: ThemeMode;
+  /** Unified OmniDeck Skin Preset applied to both OmniDeck shell and embedded WebViews. */
+  skin: SkinPresetId;
   /** 'zen' hides browser URL/nav chrome for a pure native app feel; 'classic' keeps it pinned open. */
   appChromeMode: AppChromeMode;
   /** Inject slim native scrollbars and remove "Install Desktop App" / nag banners per service. */
@@ -346,8 +366,14 @@ export interface AppSettings {
   aiCompanion: AiCompanionConfig;
   /** Universal artist/track auto-skip blocklist ("Trashbin") across YouTube Music & Spotify. */
   blockedMusic: BlockedMusicEntry[];
-  /** Local timestamped notes & quotes for Audible audiobooks. */
+  /** Auto-skip unverified / likely AI-generated artists on Spotify & YouTube Music. */
+  autoSkipAiSlop: boolean;
+  /** Artists explicitly whitelisted by the user from AI-Slop auto-skipping. */
+  whitelistedArtists: string[];
+  /** Local timestamped notes & quotes for Audible audiobooks & YouTube videos. */
   bookNotes: BookNoteEntry[];
+  /** Saved Twitch channel logins for the Multi-Stream Grid (2–4 streams). */
+  twitchMultiStreamChannels: string[];
   /** Optional Discord Rich Presence, ListenBrainz, and Last.fm scrobbling integrations. */
   integrations: IntegrationsConfig;
 }
@@ -401,6 +427,7 @@ export interface NowPlayingState {
   currentLyricLine?: string;
   duckedServiceIds?: string[];
   likeStatus?: 'like' | 'dislike' | 'none';
+  playbackRate?: number;
 }
 
 export interface SleepTimerState {
@@ -408,6 +435,26 @@ export interface SleepTimerState {
   endsAt: number | null;
   durationMinutes: number;
   fading?: boolean;
+  endOfChapter?: boolean;
+}
+
+export interface LanSyncStatus {
+  running: boolean;
+  host: string;
+  port: number;
+  pin: string;
+  pairingUrl: string;
+  lastSyncedAt?: number;
+  lastPeerName?: string;
+}
+
+export interface HandoffPayload {
+  serviceId: string;
+  url: string;
+  title?: string;
+  positionSec?: number;
+  sentAt: number;
+  fromDevice?: string;
 }
 
 export type UpdatePhase =
@@ -445,6 +492,7 @@ export interface DesktopSnapshot {
   sleepTimer: SleepTimerState;
   update: UpdateState;
   drm: DrmStatus;
+  lanSync: LanSyncStatus;
   platform: string;
   overlayOpen: boolean;
   homeActive: boolean;

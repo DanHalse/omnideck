@@ -1,13 +1,16 @@
 import { useState, type FormEvent } from 'react';
-import type {
-  BookNoteEntry,
-  ListeningStatsSummary,
-  PinnedFavorite,
-  RecentActivityItem,
-  ServiceDefinition,
-  ServiceRuntimeState,
-  SleepTimerState,
-  WorkspacePreset,
+import {
+  SKIN_PRESET_LIST,
+  type BookNoteEntry,
+  type LanSyncStatus,
+  type ListeningStatsSummary,
+  type PinnedFavorite,
+  type RecentActivityItem,
+  type ServiceDefinition,
+  type ServiceRuntimeState,
+  type SkinPresetId,
+  type SleepTimerState,
+  type WorkspacePreset,
 } from '@omnideck/shared';
 import { ServiceIcon } from './ServiceIcon';
 import {
@@ -34,6 +37,14 @@ interface HomeHubProps {
   sleepTimer: SleepTimerState;
   listeningStats: ListeningStatsSummary | null;
   bookNotes: BookNoteEntry[];
+  activeSkin: SkinPresetId;
+  lanSync: LanSyncStatus;
+  onSelectSkin: (skin: SkinPresetId) => void;
+  onOpenAudibleDeck: () => void;
+  onOpenMusicDeck: () => void;
+  onOpenTwitchMultiStream: () => void;
+  onToggleLanSync: () => void;
+  onRegenerateLanPin: () => void;
   onSelectService: (serviceId: string) => void;
   onOpenInSplit: (serviceId: string) => void;
   onOpenUrlInService: (serviceId: string, url: string) => void;
@@ -67,6 +78,14 @@ export function HomeHub({
   sleepTimer,
   listeningStats,
   bookNotes,
+  activeSkin,
+  lanSync,
+  onSelectSkin,
+  onOpenAudibleDeck,
+  onOpenMusicDeck,
+  onOpenTwitchMultiStream,
+  onToggleLanSync,
+  onRegenerateLanPin,
   onSelectService,
   onOpenInSplit,
   onOpenUrlInService,
@@ -103,16 +122,16 @@ export function HomeHub({
   return (
     <main className="home-hub" aria-label="OmniDeck Home Hub">
       <div className="home-hub__inner">
-        {/* Native Unified Cross-Service Search */}
+        {/* Native Unified Cross-Service Search & Unified Skin Bar */}
         <section className="home-hero">
           <div className="home-hero__top">
             <div>
               <h1 className="home-hero__title">OmniDeck Hub</h1>
               <p className="home-hero__subtitle">
-                Search across all your platforms, resume listening, or jump into a workspace.
+                Unified custom UI, cross-app search, custom media decks, and private PC ↔ Android Wi-Fi handoff.
               </p>
             </div>
-            <div className="control-group" style={{ gap: 6 }}>
+            <div className="control-group" style={{ gap: 6, flexWrap: 'wrap' }}>
               <button type="button" className="pill-btn" onClick={onOpenCommandPalette}>
                 <SearchIcon size={12} />
                 <span>Command Palette</span>
@@ -155,6 +174,150 @@ export function HomeHub({
               ))}
             </div>
           </form>
+
+          {/* Unified Skin Engine 1-Click Picker */}
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 10,
+              marginTop: 12,
+              paddingTop: 12,
+              borderTop: '1px solid var(--border-subtle)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-secondary)', marginRight: 4 }}>
+                UNIFIED SKIN:
+              </span>
+              {SKIN_PRESET_LIST.map((preset) => {
+                const active = activeSkin === preset.id;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    className={`pill-btn ${active ? 'pill-btn--active' : ''}`}
+                    title={preset.tagline}
+                    onClick={() => onSelectSkin(preset.id)}
+                    style={{ gap: 6 }}
+                  >
+                    <span
+                      style={{
+                        width: 9,
+                        height: 9,
+                        borderRadius: 999,
+                        background: preset.accent,
+                        border: `1.5px solid ${preset.canvas}`,
+                      }}
+                    />
+                    <span>{preset.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+
+        {/* Custom OmniDeck Decks & PC ↔ Android Wi-Fi Sync */}
+        <section className="home-section">
+          <div className="home-section__header">
+            <h2 className="section-label" style={{ margin: 0 }}>
+              Custom OmniDeck Decks &amp; Cross-Device Handoff
+            </h2>
+          </div>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+              gap: 10,
+            }}
+          >
+            <button
+              type="button"
+              className="home-app-card"
+              style={{ textAlign: 'left', alignItems: 'flex-start', flexDirection: 'column', gap: 6 }}
+              onClick={onOpenAudibleDeck}
+            >
+              <strong style={{ color: '#F7991C', fontSize: 13 }}>🎧 Custom Audible Deck</strong>
+              <span style={{ fontSize: 11, color: 'var(--ink-secondary)' }}>
+                Dark mode, volume slider, true-speed remaining, custom skip, end-of-chapter sleep &amp; notes.
+              </span>
+            </button>
+
+            <button
+              type="button"
+              className="home-app-card"
+              style={{ textAlign: 'left', alignItems: 'flex-start', flexDirection: 'column', gap: 6 }}
+              onClick={onOpenMusicDeck}
+            >
+              <strong style={{ color: '#1DB954', fontSize: 13 }}>🎵 Unified Music Deck</strong>
+              <span style={{ fontSize: 11, color: 'var(--ink-secondary)' }}>
+                Ambient stage UI for Spotify &amp; YT Music with seek bar, synced lyrics &amp; AI-slop guard.
+              </span>
+            </button>
+
+            <button
+              type="button"
+              className="home-app-card"
+              style={{ textAlign: 'left', alignItems: 'flex-start', flexDirection: 'column', gap: 6 }}
+              onClick={onOpenTwitchMultiStream}
+            >
+              <strong style={{ color: '#9146FF', fontSize: 13 }}>📺 Twitch Multi-Stream Grid</strong>
+              <span style={{ fontSize: 11, color: 'var(--ink-secondary)' }}>
+                Watch 2–4 live streams side-by-side with 1-click audio focus and switchable live chat.
+              </span>
+            </button>
+
+            <div
+              className="home-app-card"
+              style={{
+                flexDirection: 'column',
+                alignItems: 'stretch',
+                gap: 6,
+                cursor: 'default',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <strong style={{ fontSize: 13, color: 'var(--accent-primary)' }}>
+                  📱 PC ↔ Android Wi-Fi Sync
+                </strong>
+                <button
+                  type="button"
+                  className={`pill-btn ${lanSync.running ? 'pill-btn--active' : ''}`}
+                  style={{ fontSize: 10, padding: '2px 8px' }}
+                  onClick={onToggleLanSync}
+                >
+                  {lanSync.running ? 'Stop' : 'Start'}
+                </button>
+              </div>
+              {lanSync.running ? (
+                <div style={{ fontSize: 11, color: 'var(--ink-secondary)', display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  <div>
+                    Address: <code style={{ color: 'var(--ink-primary)' }}>{lanSync.pairingUrl}</code>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span>
+                      PIN: <strong style={{ color: 'var(--status-live)', letterSpacing: 1.5 }}>{lanSync.pin}</strong>
+                    </span>
+                    <button
+                      type="button"
+                      className="pill-btn"
+                      style={{ fontSize: 10, padding: '1px 7px' }}
+                      onClick={onRegenerateLanPin}
+                    >
+                      New PIN
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <span style={{ fontSize: 11, color: 'var(--ink-secondary)' }}>
+                  Sync skins, Power-Ups, notes &amp; hand off playback to Android over local Wi-Fi (no cloud).
+                </span>
+              )}
+            </div>
+          </div>
         </section>
 
         {/* Your Media Apps */}

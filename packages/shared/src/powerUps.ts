@@ -1,4 +1,5 @@
-import type { PowerUpsConfig } from './types.js';
+import type { PowerUpsConfig, SkinPresetId } from './types.js';
+import { buildUnifiedSkinCss } from './skins.js';
 
 export const DEFAULT_POWER_UPS: PowerUpsConfig = {
   // YouTube & YouTube Music
@@ -12,8 +13,15 @@ export const DEFAULT_POWER_UPS: PowerUpsConfig = {
   youtubeHideEndScreens: true,
   youtubeDisableHoverPreview: false,
   youtubePlayerControls: true,
+  youtubeStartOnSubscriptions: false,
+  youtubeHideWatched: false,
+  youtubeQuickThumbActions: true,
+  youtubeClassicLayoutLock: true,
+  youtubeBlockedChannels: [],
   ytmAudioOnlyMode: false,
   ytmPlaylistQuickFilter: true,
+  ytmSmartFadeAndSilenceTrim: true,
+  ytmPlaylistSorter: true,
 
   // Twitch
   twitchThirdPartyEmotes: true,
@@ -22,6 +30,9 @@ export const DEFAULT_POWER_UPS: PowerUpsConfig = {
   twitchPauseChatOnHover: true,
   twitchAutoRecover: true,
   twitchHideClutter: true,
+  twitchEmoteAutocomplete: true,
+  twitchChatHighlights: [],
+  twitchFollowedFirstMobile: true,
 
   // Audible
   audibleDirectToLibrary: true,
@@ -30,6 +41,8 @@ export const DEFAULT_POWER_UPS: PowerUpsConfig = {
   audibleWhisperSyncFlush: true,
   audiblePrecisionSpeed: true,
   audibleHideStoreClutter: true,
+  audibleDarkMode: true,
+  audibleCustomSkipSec: 15,
 
   // Reddit (Modern RES)
   redditCompactDensity: true,
@@ -42,32 +55,50 @@ export const DEFAULT_POWER_UPS: PowerUpsConfig = {
   redditHoverZoom: true,
   redditUserTagger: true,
   redditFilteredKeywords: [],
+  redditColorDepthLines: true,
+  redditExactTimestamps: true,
+  redditKillVideoScroll: true,
 
   // Spotify
   spotifyKeepConnectAlive: true,
   spotifyLikeShortcut: 'CommandOrControl+Alt+L',
   spotifyHidePodcastsAudiobooks: true,
+  spotifyGuardSmartShuffle: true,
+  spotifyQueueDuration: true,
 };
 
-/**
- * Safely merges partial/legacy Power-Ups configuration with curated v1.5 defaults.
- */
-export function mergePowerUpsConfig(raw?: Partial<PowerUpsConfig>): PowerUpsConfig {
-  if (!raw || typeof raw !== 'object') {
-    return { ...DEFAULT_POWER_UPS, redditFilteredKeywords: [...DEFAULT_POWER_UPS.redditFilteredKeywords] };
-  }
-  const pickBool = <K extends keyof PowerUpsConfig>(key: K): boolean =>
-    typeof raw[key] === 'boolean' ? (raw[key] as boolean) : (DEFAULT_POWER_UPS[key] as boolean);
-
-  const rawKeywords = Array.isArray(raw.redditFilteredKeywords) ? raw.redditFilteredKeywords : [];
-  const redditFilteredKeywords = Array.from(
+function sanitizeStringList(raw: unknown, maxItems = 100): string[] {
+  if (!Array.isArray(raw)) return [];
+  return Array.from(
     new Set(
-      rawKeywords
+      raw
         .filter((k): k is string => typeof k === 'string')
         .map((k) => k.trim())
         .filter((k) => k.length > 0 && k.length <= 64),
     ),
-  ).slice(0, 100);
+  ).slice(0, maxItems);
+}
+
+/**
+ * Safely merges partial/legacy Power-Ups configuration with curated v1.6 defaults.
+ */
+export function mergePowerUpsConfig(raw?: Partial<PowerUpsConfig>): PowerUpsConfig {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      ...DEFAULT_POWER_UPS,
+      redditFilteredKeywords: [...DEFAULT_POWER_UPS.redditFilteredKeywords],
+      youtubeBlockedChannels: [...DEFAULT_POWER_UPS.youtubeBlockedChannels],
+      twitchChatHighlights: [...DEFAULT_POWER_UPS.twitchChatHighlights],
+    };
+  }
+  const pickBool = <K extends keyof PowerUpsConfig>(key: K): boolean =>
+    typeof raw[key] === 'boolean' ? (raw[key] as boolean) : (DEFAULT_POWER_UPS[key] as boolean);
+
+  const rawSkip = Number(raw.audibleCustomSkipSec);
+  const audibleCustomSkipSec =
+    rawSkip === 10 || rawSkip === 15 || rawSkip === 30 || rawSkip === 60
+      ? rawSkip
+      : DEFAULT_POWER_UPS.audibleCustomSkipSec;
 
   return {
     youtubeSponsorBlock: pickBool('youtubeSponsorBlock'),
@@ -80,20 +111,32 @@ export function mergePowerUpsConfig(raw?: Partial<PowerUpsConfig>): PowerUpsConf
     youtubeHideEndScreens: pickBool('youtubeHideEndScreens'),
     youtubeDisableHoverPreview: pickBool('youtubeDisableHoverPreview'),
     youtubePlayerControls: pickBool('youtubePlayerControls'),
+    youtubeStartOnSubscriptions: pickBool('youtubeStartOnSubscriptions'),
+    youtubeHideWatched: pickBool('youtubeHideWatched'),
+    youtubeQuickThumbActions: pickBool('youtubeQuickThumbActions'),
+    youtubeClassicLayoutLock: pickBool('youtubeClassicLayoutLock'),
+    youtubeBlockedChannels: sanitizeStringList(raw.youtubeBlockedChannels),
     ytmAudioOnlyMode: pickBool('ytmAudioOnlyMode'),
     ytmPlaylistQuickFilter: pickBool('ytmPlaylistQuickFilter'),
+    ytmSmartFadeAndSilenceTrim: pickBool('ytmSmartFadeAndSilenceTrim'),
+    ytmPlaylistSorter: pickBool('ytmPlaylistSorter'),
     twitchThirdPartyEmotes: pickBool('twitchThirdPartyEmotes'),
     twitchAutoClaimPoints: pickBool('twitchAutoClaimPoints'),
     twitchAutoTheater: pickBool('twitchAutoTheater'),
     twitchPauseChatOnHover: pickBool('twitchPauseChatOnHover'),
     twitchAutoRecover: pickBool('twitchAutoRecover'),
     twitchHideClutter: pickBool('twitchHideClutter'),
+    twitchEmoteAutocomplete: pickBool('twitchEmoteAutocomplete'),
+    twitchChatHighlights: sanitizeStringList(raw.twitchChatHighlights, 60),
+    twitchFollowedFirstMobile: pickBool('twitchFollowedFirstMobile'),
     audibleDirectToLibrary: pickBool('audibleDirectToLibrary'),
     audibleDockCloudPlayer: pickBool('audibleDockCloudPlayer'),
     audibleFadeSleepAndRewind: pickBool('audibleFadeSleepAndRewind'),
     audibleWhisperSyncFlush: pickBool('audibleWhisperSyncFlush'),
     audiblePrecisionSpeed: pickBool('audiblePrecisionSpeed'),
     audibleHideStoreClutter: pickBool('audibleHideStoreClutter'),
+    audibleDarkMode: pickBool('audibleDarkMode'),
+    audibleCustomSkipSec,
     redditCompactDensity: pickBool('redditCompactDensity'),
     redditUseOldReddit: pickBool('redditUseOldReddit'),
     redditKeyboardNav: pickBool('redditKeyboardNav'),
@@ -103,19 +146,26 @@ export function mergePowerUpsConfig(raw?: Partial<PowerUpsConfig>): PowerUpsConf
     redditNextCommentButton: pickBool('redditNextCommentButton'),
     redditHoverZoom: pickBool('redditHoverZoom'),
     redditUserTagger: pickBool('redditUserTagger'),
-    redditFilteredKeywords,
+    redditFilteredKeywords: sanitizeStringList(raw.redditFilteredKeywords),
+    redditColorDepthLines: pickBool('redditColorDepthLines'),
+    redditExactTimestamps: pickBool('redditExactTimestamps'),
+    redditKillVideoScroll: pickBool('redditKillVideoScroll'),
     spotifyKeepConnectAlive: pickBool('spotifyKeepConnectAlive'),
     spotifyLikeShortcut:
       typeof raw.spotifyLikeShortcut === 'string' && raw.spotifyLikeShortcut.trim()
         ? raw.spotifyLikeShortcut.trim()
         : DEFAULT_POWER_UPS.spotifyLikeShortcut,
     spotifyHidePodcastsAudiobooks: pickBool('spotifyHidePodcastsAudiobooks'),
+    spotifyGuardSmartShuffle: pickBool('spotifyGuardSmartShuffle'),
+    spotifyQueueDuration: pickBool('spotifyQueueDuration'),
   };
 }
 
 /**
  * Rewrites navigation URLs for active Power-Ups while carefully preserving OAuth/sign-in flows:
  * - YouTube Shorts (`/shorts/<id>`) -> standard `/watch?v=<id>` player when `youtubeHideShorts` is on
+ * - YouTube bare `/` -> `/feed/subscriptions` when `youtubeStartOnSubscriptions` is on
+ * - Twitch mobile bare `/` -> `/directory/following/live` when `twitchFollowedFirstMobile` is on
  * - Reddit `www.reddit.com` -> `old.reddit.com` when `redditUseOldReddit` is on
  * - Audible bare storefront homepage -> `/library/titles` when `audibleDirectToLibrary` is on
  */
@@ -159,6 +209,28 @@ export function rewriteUrlForPowerUps(
         next.searchParams.set('v', shortsMatch[1]);
         return next.toString();
       }
+    }
+
+    // YouTube: Start directly on Subscriptions feed instead of algorithmic Home
+    if (
+      serviceId === 'youtube' &&
+      powerUps.youtubeStartOnSubscriptions &&
+      (host === 'www.youtube.com' || host === 'youtube.com' || host === 'm.youtube.com') &&
+      (parsed.pathname === '/' || parsed.pathname === '') &&
+      !parsed.search
+    ) {
+      return `${parsed.origin}/feed/subscriptions`;
+    }
+
+    // Twitch Mobile: Followed-First mode (skip TikTok-style discovery feed)
+    if (
+      serviceId === 'twitch' &&
+      powerUps.twitchFollowedFirstMobile &&
+      host === 'm.twitch.tv' &&
+      (parsed.pathname === '/' || parsed.pathname === '') &&
+      !parsed.search
+    ) {
+      return 'https://m.twitch.tv/directory/following/live';
     }
 
     // Reddit: Optional 1-click Old Reddit redirect
@@ -269,8 +341,27 @@ export function extractTwitchChannelLogin(rawUrl: string): string | null {
  * - Reddit: Dismiss/hide unclosable "Open in Reddit App" / xpromo popups, hide promoted posts, collapse AutoMod
  * - Spotify: Transform desktop Widevine Web Player into a touch-friendly responsive mobile layout with toggleable Library drawer
  */
-export function buildMobilePowerUpsScript(serviceId: string, powerUps: PowerUpsConfig): string {
+export function buildMobilePowerUpsScript(
+  serviceId: string,
+  powerUps: PowerUpsConfig,
+  skinId: SkinPresetId = 'obsidian',
+): string {
   const parts: string[] = [];
+
+  const unifiedSkinCss = buildUnifiedSkinCss(serviceId, skinId, powerUps);
+  if (unifiedSkinCss.trim()) {
+    parts.push(`
+      (function(){
+        var st = document.getElementById('__od_unified_skin_css');
+        if (!st) {
+          st = document.createElement('style');
+          st.id = '__od_unified_skin_css';
+          (document.head || document.documentElement).appendChild(st);
+        }
+        st.textContent = ${JSON.stringify(unifiedSkinCss)};
+      })();
+    `);
+  }
 
   if (serviceId === 'youtube' || serviceId === 'youtube-music') {
     if (serviceId === 'youtube-music') {

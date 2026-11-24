@@ -29,6 +29,8 @@ interface NowPlayingHubProps {
   nowPlaying: NowPlayingState;
   services: ServiceDefinition[];
   aiConfig: AiCompanionConfig;
+  autoSkipAiSlop?: boolean;
+  whitelistedArtists?: string[];
   topOffset: number;
   bottomOffset: number;
   onClose: () => void;
@@ -36,6 +38,12 @@ interface NowPlayingHubProps {
   onPlayPause: (serviceId?: string) => void;
   onPrevious: (serviceId?: string) => void;
   onNext: (serviceId?: string) => void;
+  onSeek?: (targetSec: number, serviceId?: string) => void;
+  onSetVolume?: (serviceId: string, volume: number) => void;
+  onLike?: (serviceId?: string) => void;
+  onDislike?: (serviceId?: string) => void;
+  onToggleAutoSkipAiSlop?: () => void;
+  onWhitelistArtist?: (artistName: string) => void;
   onSearchInService: (serviceId: string, query: string) => void;
   onOpenAiSettings: () => void;
   onLoadDossier: (input: {
@@ -72,6 +80,8 @@ export function NowPlayingHub({
   nowPlaying,
   services,
   aiConfig,
+  autoSkipAiSlop = false,
+  whitelistedArtists = [],
   topOffset,
   bottomOffset,
   onClose,
@@ -79,6 +89,12 @@ export function NowPlayingHub({
   onPlayPause,
   onPrevious,
   onNext,
+  onSeek,
+  onSetVolume,
+  onLike,
+  onDislike,
+  onToggleAutoSkipAiSlop,
+  onWhitelistArtist,
   onSearchInService,
   onOpenAiSettings,
   onLoadDossier,
@@ -741,7 +757,7 @@ export function NowPlayingHub({
               size={14}
               color={currentService?.accentColor ?? '#FF2D43'}
             />
-            <span>Now Playing Stage</span>
+            <span>OmniDeck Music Deck</span>
             {dossier?.aiEnriched && (
               <span className="np-ai-pill">
                 <SparklesIcon size={11} /> AI Enhanced
@@ -749,6 +765,16 @@ export function NowPlayingHub({
             )}
           </div>
           <div className="control-group" style={{ gap: 6 }}>
+            {onToggleAutoSkipAiSlop && (
+              <button
+                type="button"
+                className={`pill-btn ${autoSkipAiSlop ? 'pill-btn--active' : ''}`}
+                title="Automatically skip unverified / likely AI-generated artists on Spotify & YouTube Music"
+                onClick={onToggleAutoSkipAiSlop}
+              >
+                <span>{autoSkipAiSlop ? '🛡 Auto-Skip AI: ON' : '🛡 Auto-Skip AI: OFF'}</span>
+              </button>
+            )}
             <button
               type="button"
               className="pill-btn"
@@ -787,13 +813,40 @@ export function NowPlayingHub({
                 {dossier?.artistName || nowPlaying.artist || 'Start a song in YouTube Music or Spotify'}
               </div>
               {dossier?.albumName && <div className="np-stage__album">{dossier.albumName}</div>}
+              {dossier?.verificationStatus === 'unverified' && dossier.artistName && onWhitelistArtist && (
+                <div style={{ marginTop: 8, display: 'flex', justifyContent: 'center', gap: 6 }}>
+                  <span className="np-verify-pill np-verify-pill--warn">Unverified / Possible AI</span>
+                  {!whitelistedArtists.some((a) => a.toLowerCase() === dossier.artistName.toLowerCase()) && (
+                    <button
+                      type="button"
+                      className="pill-btn"
+                      style={{ fontSize: 11, padding: '2px 8px' }}
+                      onClick={() => onWhitelistArtist(dossier.artistName)}
+                    >
+                      ✓ Whitelist Artist
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
 
             {typeof nowPlaying.durationSec === 'number' && nowPlaying.durationSec > 0 && (
               <div className="np-progress">
-                <div className="np-progress__bar">
-                  <div className="np-progress__fill" style={{ width: `${progressPct}%` }} />
-                </div>
+                {onSeek ? (
+                  <input
+                    type="range"
+                    aria-label="Seek song position"
+                    min={0}
+                    max={Math.max(1, Math.floor(nowPlaying.durationSec))}
+                    value={Math.floor(liveTimeSec ?? 0)}
+                    onChange={(e) => onSeek(Number(e.target.value), nowPlaying.serviceId ?? undefined)}
+                    style={{ width: '100%', accentColor: currentService?.accentColor ?? 'var(--accent-primary)', cursor: 'pointer' }}
+                  />
+                ) : (
+                  <div className="np-progress__bar">
+                    <div className="np-progress__fill" style={{ width: `${progressPct}%` }} />
+                  </div>
+                )}
                 <div className="np-progress__times">
                   <span>{formatSec(liveTimeSec)}</span>
                   <span>{formatSec(nowPlaying.durationSec)}</span>
@@ -802,6 +855,16 @@ export function NowPlayingHub({
             )}
 
             <div className="np-stage__controls">
+              {onDislike && (
+                <button
+                  type="button"
+                  className={`pill-btn ${nowPlaying.likeStatus === 'dislike' ? 'pill-btn--active' : ''}`}
+                  title="Dislike track"
+                  onClick={() => onDislike(nowPlaying.serviceId ?? undefined)}
+                >
+                  👎
+                </button>
+              )}
               <button
                 type="button"
                 className="icon-btn"
@@ -826,7 +889,35 @@ export function NowPlayingHub({
               >
                 <SkipForwardIcon size={18} />
               </button>
+              {onLike && (
+                <button
+                  type="button"
+                  className={`pill-btn ${nowPlaying.likeStatus === 'like' ? 'pill-btn--active' : ''}`}
+                  title="Like track"
+                  onClick={() => onLike(nowPlaying.serviceId ?? undefined)}
+                >
+                  👍
+                </button>
+              )}
             </div>
+
+            {onSetVolume && nowPlaying.serviceId && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', maxWidth: 240, marginTop: 6 }}>
+                <span style={{ fontSize: 11, color: 'var(--ink-secondary)' }}>Vol</span>
+                <input
+                  type="range"
+                  aria-label="Music Deck Volume"
+                  min={0}
+                  max={100}
+                  value={nowPlaying.muted ? 0 : Math.round((nowPlaying.volume ?? 1) * 100)}
+                  onChange={(e) => onSetVolume(nowPlaying.serviceId!, Number(e.target.value) / 100)}
+                  style={{ flex: 1, accentColor: 'var(--accent-primary)' }}
+                />
+                <span style={{ fontSize: 11, color: 'var(--ink-secondary)', width: 32, textAlign: 'right' }}>
+                  {nowPlaying.muted ? '0%' : `${Math.round((nowPlaying.volume ?? 1) * 100)}%`}
+                </span>
+              </div>
+            )}
           </div>
 
           {/* Right Intelligence Column */}

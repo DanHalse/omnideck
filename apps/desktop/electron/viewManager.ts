@@ -8,6 +8,7 @@ import {
   clipboard,
 } from 'electron';
 import {
+  addBookNote,
   clampVolume,
   clampZoom,
   computeDesktopLayoutBounds,
@@ -16,6 +17,7 @@ import {
   extractTwitchChannelLogin,
   extractYouTubeVideoId,
   findActiveLyricIndex,
+  isArtistWhitelisted,
   isInAppPopupUrl,
   matchServiceForUrl,
   matchesBlockedMusic,
@@ -30,6 +32,7 @@ import {
   type ChromeInsets,
   type DesktopSnapshot,
   type DrmStatus,
+  type LanSyncStatus,
   type LyricLine,
   type NowPlayingState,
   type PersistedConfig,
@@ -56,6 +59,7 @@ import {
   buildSpotifyPowerUpScript,
   buildTwitchEmotesInjector,
   buildTwitchPowerUpScript,
+  buildV16EnhancementsScript,
   buildYouTubeDislikesInjector,
   buildYouTubePowerUpScript,
   CAPTURE_HIBERNATE_STATE_SCRIPT,
@@ -151,6 +155,16 @@ export class ViewManager {
   private blockCountEmitTimer: ReturnType<typeof setTimeout> | null = null;
   private toastMessage: string | null = null;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
+  private lanSyncStatus: LanSyncStatus = {
+    running: false,
+    host: '127.0.0.1',
+    port: 47831,
+    pin: '',
+    pairingUrl: '',
+  };
+  private aiSlopChecker: ((serviceId: string, title: string, artist: string) => Promise<boolean>) | null = null;
+  private lastAiSlopCheckedKey = '';
+  private lastAiSlopSkipAt = 0;
 
   constructor(
     mainWindow: BrowserWindow,
@@ -176,6 +190,80 @@ export class ViewManager {
 
     this.bindWindowEvents();
     this.startBackgroundLoops();
+  }
+
+  setLanSyncStatus(status: LanSyncStatus): void {
+    this.lanSyncStatus = status;
+    this.emitSnapshot();
+  }
+
+  setAiSlopChecker(
+    checker: (serviceId: string, title: string, artist: string) => Promise<boolean>,
+  ): void {
+    this.aiSlopChecker = checker;
+  }
+
+  reapplySkinsToAllViews(): void {
+    if (!this.config.settings.nativePolishCss) return;
+    const skin = this.config.settings.skin;
+    const powerUps = this.config.settings.powerUps;
+    for (const [serviceId, view] of this.views.entries()) {
+      if (view.webContents.isDestroyed()) continue;
+      void view.webContents
+        .insertCSS(buildNativePolishCss(serviceId, skin, powerUps))
+        .catch(() => {});
+    }
+    if (this.audiblePlayerView && !this.audiblePlayerView.webContents.isDestroyed()) {
+      void this.audiblePlayerView.webContents
+        .insertCSS(buildNativePolishCss('audible', skin, powerUps))
+        .catch(() => {});
+    }
+  }
+
+  async controlAudibleDeck(
+    action: 'state' | 'playPause' | 'skip' | 'seek' | 'rate' | 'selectChapter' | 'toggleEndOfChapterSleep',
+    value?: number,
+  ): Promise<unknown> {
+    const targetWc =
+      this.audiblePlayerView && !this.audiblePlayerView.webContents.isDestroyed()
+        ? this.audiblePlayerView.webContents
+        : this.views.get('audible')?.webContents;
+    if (!targetWc || targetWc.isDestroyed()) return null;
+    try {
+      const arg = typeof value === 'number' && Number.isFinite(value) ? value : 'undefined';
+      const result = await targetWc.executeJavaScript(
+        `typeof window.__odAudibleDeckControl === 'function' ? window.__odAudibleDeckControl(${JSON.stringify(action)}, ${arg}) : null`,
+        true,
+      );
+      if (action === 'toggleEndOfChapterSleep' && result && typeof result === 'object') {
+        const armed = Boolean((result as { endOfChapterArmed?: boolean }).endOfChapterArmed);
+        this.sleepTimerState = {
+          ...this.sleepTimerState,
+          endOfChapter: armed,
+        };
+        this.emitSnapshot();
+      }
+      return result;
+    } catch {
+      return null;
+    }
+  }
+
+  getActiveHandoffPayload(): { serviceId: string; url: string; title: string; positionSec?: number; sentAt: number } | null {
+    const np = this.computeNowPlaying();
+    const activeId = np.serviceId || this.config.activeServiceId || null;
+    if (!activeId) return null;
+    const rt = this.runtime.get(activeId);
+    const meta = this.mediaMeta.get(activeId);
+    const url = rt?.currentUrl;
+    if (!url || !/^https?:\/\//i.test(url)) return null;
+    return {
+      serviceId: activeId,
+      url,
+      title: meta?.title || rt?.pageTitle || activeId,
+      positionSec: typeof meta?.currentTimeSec === 'number' ? Math.floor(meta.currentTimeSec) : undefined,
+      sentAt: Date.now(),
+    };
   }
 
   setUpdateState(next: UpdateState): void {
@@ -231,6 +319,7 @@ export class ViewManager {
       sleepTimer: this.sleepTimerState,
       update: this.updateState,
       drm: this.drmStatus,
+      lanSync: this.lanSyncStatus,
       platform: process.platform,
       overlayOpen: this.overlayOpen,
       homeActive: this.homeActive,
@@ -1440,7 +1529,7 @@ export class ViewManager {
 
     if (this.config.settings.nativePolishCss) {
       void wc
-        .insertCSS(buildNativePolishCss(service.id, this.config.settings.theme, powerUps))
+        .insertCSS(buildNativePolishCss(service.id, this.config.settings.skin, powerUps))
         .catch(() => {});
     }
 
@@ -1456,6 +1545,11 @@ export class ViewManager {
       void wc.executeJavaScript(buildSpotifyPowerUpScript(powerUps), true).catch(() => {});
     } else if (service.id === 'audible') {
       void wc.executeJavaScript(buildAudiblePowerUpScript(powerUps), true).catch(() => {});
+    }
+
+    const v16Script = buildV16EnhancementsScript(service.id, powerUps);
+    if (v16Script) {
+      void wc.executeJavaScript(v16Script, true).catch(() => {});
     }
 
     this.syncDynamicPowerUpData(service.id, wc.getURL());
@@ -1583,12 +1677,16 @@ export class ViewManager {
       if (wc.isDestroyed()) return;
       if (this.config.settings.nativePolishCss) {
         void wc
-          .insertCSS(buildNativePolishCss('audible', this.config.settings.theme, this.config.settings.powerUps))
+          .insertCSS(buildNativePolishCss('audible', this.config.settings.skin, this.config.settings.powerUps))
           .catch(() => {});
       }
       void wc
         .executeJavaScript(buildAudiblePowerUpScript(this.config.settings.powerUps), true)
         .catch(() => {});
+      const v16Audible = buildV16EnhancementsScript('audible', this.config.settings.powerUps);
+      if (v16Audible) {
+        void wc.executeJavaScript(v16Audible, true).catch(() => {});
+      }
       const curRt = this.runtime.get('audible');
       if (curRt && curRt.volume < 0.99) {
         this.applyVolumeToView('audible', curRt.volume);
@@ -1742,6 +1840,33 @@ export class ViewManager {
           .catch(() => {});
       }
     });
+
+    if (service.id === 'youtube') {
+      wc.on('console-message', (_event, _level, message) => {
+        if (!message || !message.startsWith('__OD_VIDEO_NOTE__:')) return;
+        try {
+          const parsed = JSON.parse(message.slice('__OD_VIDEO_NOTE__:'.length)) as {
+            bookTitle?: string;
+            timestampLabel?: string;
+            note?: string;
+            url?: string;
+          };
+          if (parsed.bookTitle && parsed.note) {
+            const nextCfg = addBookNote(this.config, {
+              bookTitle: parsed.bookTitle,
+              timestampLabel: parsed.timestampLabel || '0:00',
+              note: parsed.note,
+              url: parsed.url,
+            });
+            this.config = nextCfg;
+            this.onConfigUpdated(nextCfg);
+            this.showToast(`Saved video note at ${parsed.timestampLabel || '0:00'}`, 2600);
+          }
+        } catch {
+          // Ignore malformed note payload
+        }
+      });
+    }
 
     wc.on('did-stop-loading', () => {
       const rt = this.runtime.get(service.id);
@@ -2056,6 +2181,41 @@ export class ViewManager {
           this.lastTrashbinSkipAt = now;
           this.showToast(`Auto-skipped blocked ${hit.kind}: ${hit.value}`, 2600);
           void this.runMediaAction('next', serviceId);
+        }
+      }
+
+      // Phase 2 Anti-Slop Engine: Optional Auto-Skip for Unverified / Likely AI Artists
+      if (
+        (serviceId === 'youtube-music' || serviceId === 'spotify') &&
+        livePlaying &&
+        this.config.settings.autoSkipAiSlop &&
+        this.aiSlopChecker &&
+        merged.title &&
+        merged.artist &&
+        !isArtistWhitelisted(this.config.settings.whitelistedArtists, merged.artist) &&
+        now - this.lastAiSlopSkipAt > 4500
+      ) {
+        const key = `${serviceId}::${merged.artist.toLowerCase()}::${merged.title.toLowerCase()}`;
+        if (this.lastAiSlopCheckedKey !== key) {
+          this.lastAiSlopCheckedKey = key;
+          const artistToCheck = merged.artist;
+          const titleToCheck = merged.title;
+          void this.aiSlopChecker(serviceId, titleToCheck, artistToCheck).then((isLikelyAi) => {
+            if (
+              !isLikelyAi ||
+              !this.config.settings.autoSkipAiSlop ||
+              isArtistWhitelisted(this.config.settings.whitelistedArtists, artistToCheck)
+            ) {
+              return;
+            }
+            if (this.lastAiSlopCheckedKey !== key) return;
+            this.lastAiSlopSkipAt = Date.now();
+            this.showToast(
+              `Auto-skipped unverified / likely AI artist: ${artistToCheck} (whitelist in Music Deck or Settings)`,
+              4200,
+            );
+            void this.runMediaAction('next', serviceId);
+          });
         }
       }
     } catch {

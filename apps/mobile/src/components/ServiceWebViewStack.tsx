@@ -13,6 +13,7 @@ import {
   rewriteUrlForPowerUps,
   type PowerUpsConfig,
   type ServiceDefinition,
+  type SkinPresetId,
 } from '@omnideck/shared';
 import type { MobilePalette } from '../theme';
 import type { MobileNowPlaying } from './ArtistHubSheet';
@@ -40,6 +41,7 @@ export interface MobileNavState {
 
 interface ServiceWebViewStackProps {
   palette: MobilePalette;
+  skin: SkinPresetId;
   services: ServiceDefinition[];
   allServices: ServiceDefinition[];
   activeServiceId: string;
@@ -260,6 +262,7 @@ function buildMobileMediaBridgeScript(serviceId: string): string {
  */
 export function ServiceWebViewStack({
   palette,
+  skin,
   services,
   allServices,
   activeServiceId,
@@ -309,17 +312,17 @@ export function ServiceWebViewStack({
     }
   };
 
-  // Apply live mute & power-up changes to already-mounted WebViews
+  // Apply live mute, skin & power-up changes to already-mounted WebViews
   useEffect(() => {
     for (const svc of services) {
       if (!mountedIds.has(svc.id) || hibernatedIds.has(svc.id)) continue;
       const ref = webViewRefs.current[svc.id];
       if (ref) {
         ref.injectJavaScript(buildMuteScript(mutedIds.has(svc.id)));
-        ref.injectJavaScript(buildMobilePowerUpsScript(svc.id, powerUps));
+        ref.injectJavaScript(buildMobilePowerUpsScript(svc.id, powerUps, skin));
       }
     }
-  }, [services, mountedIds, hibernatedIds, mutedIds, powerUps, webViewRefs]);
+  }, [services, mountedIds, hibernatedIds, mutedIds, powerUps, skin, webViewRefs]);
 
   return (
     <View style={[styles.stage, { backgroundColor: palette.canvas }]}>
@@ -365,7 +368,7 @@ export function ServiceWebViewStack({
         const userAgent = useDesktopUa ? DESKTOP_LINUX_CHROME_UA : MOBILE_ANDROID_CHROME_UA;
         const rawUri = urlOverrides[svc.id] || (useDesktopUa ? svc.url : (svc.mobileUrl || svc.url));
         const targetUri = rewriteUrlForPowerUps(svc.id, rawUri, powerUps) ?? rawUri;
-        const combinedInjectedScript = `${buildMuteScript(mutedIds.has(svc.id))}\n${buildMobilePowerUpsScript(svc.id, powerUps)}\n${buildMobileMediaBridgeScript(svc.id)}`;
+        const combinedInjectedScript = `${buildMuteScript(mutedIds.has(svc.id))}\n${buildMobilePowerUpsScript(svc.id, powerUps, skin)}\n${buildMobileMediaBridgeScript(svc.id)}`;
 
         return (
           <View

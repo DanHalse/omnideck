@@ -20,17 +20,21 @@ import {
   removeBookNote,
   removeCustomService,
   removeFavorite,
+  removeWhitelistedArtist,
   reorderServices,
+  resolveSkinPreset,
   saveCustomWorkspace,
   selectActiveService,
   serializeConfigForExport,
   setServiceVolume,
   setSplitRatio,
+  setTwitchMultiStreamChannels,
   swapSplitPanes,
   toggleServiceAdBlock,
   toggleServiceVisibility,
   toggleSplitView,
   updateService,
+  whitelistArtist,
   type DesktopSnapshot,
   type PersistedConfig,
   type ServiceRuntimeState,
@@ -144,6 +148,13 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
         widevineReady: true,
         widevineVersion: 'Preview Mode',
         message: 'Running desktop shell in browser preview mode.',
+      },
+      lanSync: {
+        running: false,
+        host: '127.0.0.1',
+        port: 47831,
+        pin: '482910',
+        pairingUrl: 'http://127.0.0.1:47831',
       },
       platform: 'browser-preview',
       overlayOpen,
@@ -470,7 +481,13 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
     },
 
     updateSettings: async (patch) => {
-      config = { ...config, settings: { ...config.settings, ...patch } };
+      const next = { ...config.settings, ...patch };
+      if (patch.skin) {
+        next.theme = resolveSkinPreset(patch.skin).baseTheme;
+      } else if (patch.theme && patch.theme !== config.settings.theme) {
+        next.skin = patch.theme === 'light' ? 'daylight' : 'obsidian';
+      }
+      config = { ...config, settings: next };
       return commit();
     },
     updatePowerUps: async (patch) => {
@@ -509,6 +526,40 @@ function createBrowserPreviewBridge(): OmniDeckBridge {
       config = removeBookNote(config, noteId);
       return commit();
     },
+    whitelistArtist: async (artistName) => {
+      config = whitelistArtist(config, artistName);
+      return commit();
+    },
+    removeWhitelistedArtist: async (artistName) => {
+      config = removeWhitelistedArtist(config, artistName);
+      return commit();
+    },
+    setTwitchMultiStreamChannels: async (channels) => {
+      config = setTwitchMultiStreamChannels(config, channels);
+      return commit();
+    },
+    audibleDeckControl: async () => null,
+    lanSyncStart: async () => ({
+      running: true,
+      host: '127.0.0.1',
+      port: 47831,
+      pin: '482910',
+      pairingUrl: 'http://127.0.0.1:47831',
+    }),
+    lanSyncStop: async () => ({
+      running: false,
+      host: '127.0.0.1',
+      port: 47831,
+      pin: '482910',
+      pairingUrl: 'http://127.0.0.1:47831',
+    }),
+    lanSyncRegeneratePin: async () => ({
+      running: false,
+      host: '127.0.0.1',
+      port: 47831,
+      pin: String(Math.floor(100000 + Math.random() * 899999)),
+      pairingUrl: 'http://127.0.0.1:47831',
+    }),
     addCustomService: async (input) => {
       const added = addCustomService(config, input);
       homeActive = false;

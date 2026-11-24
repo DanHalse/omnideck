@@ -32,17 +32,22 @@ import {
   removeBookNote,
   removeCustomService,
   removeFavorite,
+  removeWhitelistedArtist,
   reorderServices,
+  resolveSkinPreset,
   saveCustomWorkspace,
   selectActiveService,
   serializeConfigForExport,
   setServiceVolume,
   setSplitRatio,
+  setTwitchMultiStreamChannels,
   swapSplitPanes,
   toggleServiceAdBlock,
   toggleServiceVisibility,
   toggleSplitView,
   updateService,
+  whitelistArtist,
+  isValidSkinPresetId,
   type AiCompanionConfig,
   type AppSettings,
   type ArtistDossier,
@@ -63,6 +68,7 @@ import { MusicIntelService } from './musicIntel.js';
 import { ListeningStatsStore } from './listeningStats.js';
 import { MiniPlayerManager } from './miniPlayer.js';
 import { IntegrationsManager, TaskbarControlsManager } from './integrations.js';
+import { LanSyncServer } from './lanSync.js';
 import type { UiCommandEvent } from './ipcTypes.js';
 
 app.setName('OmniDeck');
@@ -108,6 +114,7 @@ let musicIntel: MusicIntelService | null = null;
 let listeningStats: ListeningStatsStore | null = null;
 let miniPlayer: MiniPlayerManager | null = null;
 let integrations: IntegrationsManager | null = null;
+let lanSyncServer: LanSyncServer | null = null;
 const taskbarControls = new TaskbarControlsManager();
 let forceQuitting = false;
 let audibleFlushedOnQuit = false;
@@ -910,9 +917,24 @@ function registerIpcHandlers(): void {
             : 'pause'
           : 'off'
         : current.settings.audioFocusMode);
+
+    let nextSkin = current.settings.skin;
+    let nextTheme = current.settings.theme;
+    if (patch.skin && isValidSkinPresetId(patch.skin)) {
+      nextSkin = patch.skin;
+      nextTheme = resolveSkinPreset(patch.skin).baseTheme;
+    } else if (patch.theme && patch.theme !== current.settings.theme) {
+      nextTheme = patch.theme;
+      nextSkin = patch.theme === 'light' ? 'daylight' : 'obsidian';
+    }
+
+    const skinChanged = nextSkin !== current.settings.skin || nextTheme !== current.settings.theme;
+
     const nextSettings: AppSettings = {
       ...current.settings,
       ...patch,
+      skin: nextSkin,
+      theme: nextTheme,
       audioFocusMode: nextAudioFocus,
       smartAudioSwitching: nextAudioFocus !== 'off',
       audioDuckLevel:
@@ -938,7 +960,11 @@ function registerIpcHandlers(): void {
     syncGlobalLikeShortcut(nextSettings.powerUps.spotifyLikeShortcut);
     syncLaunchAtLogin(nextSettings.launchAtLogin);
     updateManager?.startSchedule(nextSettings.autoCheckUpdates);
-    return viewManager.syncConfig(updated);
+    const snap = viewManager.syncConfig(updated);
+    if (skinChanged) {
+      viewManager.reapplySkinsToAllViews();
+    }
+    return snap;
   });
 
   ipcMain.handle('omnideck:update-power-ups', (_e, patch: Partial<PowerUpsConfig>) => {
@@ -953,7 +979,9 @@ function registerIpcHandlers(): void {
       },
     });
     syncGlobalLikeShortcut(nextPowerUps.spotifyLikeShortcut);
-    return viewManager.syncConfig(updated);
+    const snap = viewManager.syncConfig(updated);
+    viewManager.reapplySkinsToAllViews();
+    return snap;
   });
 
   ipcMain.handle('omnideck:update-equalizer', (_e, patch: Partial<EqualizerConfig>) => {
@@ -1020,12 +1048,58 @@ function registerIpcHandlers(): void {
     return viewManager.syncConfig(updated);
   });
 
+  ipcMain.handle('omnideck:whitelist-artist', (_e, artistName: string) => {
+    if (!store || !viewManager) return null;
+    const updated = store.set(whitelistArtist(store.get(), artistName));
+    viewManager.showToast(`Whitelisted artist: ${artistName}`, 2400);
+    return viewManager.syncConfig(updated);
+  });
+
+  ipcMain.handle('omnideck:remove-whitelisted-artist', (_e, artistName: string) => {
+    if (!store || !viewManager) return null;
+    const updated = store.set(removeWhitelistedArtist(store.get(), artistName));
+    return viewManager.syncConfig(updated);
+  });
+
+  ipcMain.handle('omnideck:set-twitch-multistream', (_e, channels: string[]) => {
+    if (!store || !viewManager) return null;
+    const updated = store.set(setTwitchMultiStreamChannels(store.get(), channels));
+    return viewManager.syncConfig(updated);
+  });
+
+  ipcMain.handle(
+    'omnideck:audible-deck-control',
+    (
+      _e,
+      action: 'state' | 'playPause' | 'skip' | 'seek' | 'rate' | 'selectChapter' | 'toggleEndOfChapterSleep',
+      value?: number,
+    ) => {
+      if (!viewManager) return null;
+      return viewManager.controlAudibleDeck(action, value);
+    },
+  );
+
+  ipcMain.handle('omnideck:lan-sync-start', async () => {
+    if (!lanSyncServer) return null;
+    return lanSyncServer.start();
+  });
+
+  ipcMain.handle('omnideck:lan-sync-stop', async () => {
+    if (!lanSyncServer) return null;
+    return lanSyncServer.stop();
+  });
+
+  ipcMain.handle('omnideck:lan-sync-regenerate-pin', () => {
+    if (!lanSyncServer) return null;
+    return lanSyncServer.regeneratePin();
+  });
+
   ipcMain.handle(
     'omnideck:add-book-note',
     (_e, input: { bookTitle: string; timestampLabel: string; note: string; url?: string }) => {
       if (!store || !viewManager) return null;
       const updated = store.set(addBookNote(store.get(), input));
-      viewManager.showToast('Saved Audible book note', 2000);
+      viewManager.showToast('Saved timestamped note', 2000);
       return viewManager.syncConfig(updated);
     },
   );
@@ -1303,6 +1377,120 @@ async function createMainWindow(drmStatus: DrmStatus): Promise<void> {
     listeningStats,
   );
 
+  // Wire Phase 2 Anti-Slop Auto-Skipper using MusicIntelService artist verification
+  viewManager.setAiSlopChecker(async (serviceId, title, artist) => {
+    if (!musicIntel || !store) return false;
+    try {
+      const dossier = await musicIntel.getArtistDossier(
+        { serviceId, title, artist },
+        store.get().settings.aiCompanion,
+      );
+      return dossier.verificationStatus === 'unverified';
+    } catch {
+      return false;
+    }
+  });
+
+  // Wire Phase 3 Zero-Cloud PC ↔ Android Local Wi-Fi Sync & Handoff Server
+  lanSyncServer = new LanSyncServer({
+    getConfig: () => store!.get(),
+    getCurrentHandoff: () => viewManager?.getActiveHandoffPayload() ?? null,
+    onMergeIncomingBundle: (incoming, peerName) => {
+      if (!store || !viewManager) return;
+      let next = store.get();
+      if (incoming.skin && isValidSkinPresetId(incoming.skin)) {
+        next = {
+          ...next,
+          settings: {
+            ...next.settings,
+            skin: incoming.skin,
+            theme: resolveSkinPreset(incoming.skin).baseTheme,
+          },
+        };
+      }
+      if (incoming.powerUps) {
+        next = {
+          ...next,
+          settings: {
+            ...next.settings,
+            powerUps: mergePowerUpsConfig({ ...next.settings.powerUps, ...incoming.powerUps }),
+          },
+        };
+      }
+      if (Array.isArray(incoming.blockedMusic)) {
+        for (const entry of incoming.blockedMusic) {
+          if (entry && entry.value && (entry.kind === 'artist' || entry.kind === 'track')) {
+            next = addBlockedMusicEntry(next, {
+              kind: entry.kind,
+              value: entry.value,
+              artist: entry.artist,
+            });
+          }
+        }
+      }
+      if (Array.isArray(incoming.whitelistedArtists)) {
+        for (const artist of incoming.whitelistedArtists) {
+          if (typeof artist === 'string') next = whitelistArtist(next, artist);
+        }
+      }
+      if (Array.isArray(incoming.bookNotes)) {
+        const existingKeys = new Set(
+          (next.settings.bookNotes ?? []).map((n) => `${n.bookTitle}::${n.timestampLabel}::${n.note}`),
+        );
+        for (const n of incoming.bookNotes) {
+          const k = `${n.bookTitle}::${n.timestampLabel}::${n.note}`;
+          if (n.bookTitle && n.note && !existingKeys.has(k)) {
+            next = addBookNote(next, {
+              bookTitle: n.bookTitle,
+              timestampLabel: n.timestampLabel,
+              note: n.note,
+              url: n.url,
+            });
+          }
+        }
+      }
+      if (Array.isArray(incoming.pinnedFavorites)) {
+        for (const fav of incoming.pinnedFavorites) {
+          if (fav.serviceId && fav.url && fav.title) {
+            next = pinFavorite(next, {
+              serviceId: fav.serviceId,
+              title: fav.title,
+              url: fav.url,
+            });
+          }
+        }
+      }
+      const saved = store.set(next);
+      viewManager.syncConfig(saved);
+      viewManager.reapplySkinsToAllViews();
+      viewManager.showToast(`Synced with ${peerName || 'Android'} over Wi-Fi`, 2800);
+    },
+    onIncomingHandoff: (payload) => {
+      if (!viewManager) return;
+      viewManager.openServiceUrl(payload.serviceId, payload.url, false);
+      if (typeof payload.positionSec === 'number' && payload.positionSec > 3) {
+        setTimeout(() => {
+          void viewManager?.seekMedia(payload.positionSec!, payload.serviceId);
+        }, 2500);
+      }
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+      }
+      viewManager.showToast(
+        `Continued "${payload.title || payload.serviceId}" from ${payload.fromDevice || 'Phone'}`,
+        3200,
+      );
+    },
+    onStatusChanged: () => {
+      if (lanSyncServer && viewManager) {
+        viewManager.setLanSyncStatus(lanSyncServer.getStatus());
+      }
+    },
+  });
+  viewManager.setLanSyncStatus(lanSyncServer.getStatus());
+
   integrations = new IntegrationsManager(initialConfig.settings.integrations);
   syncHardwareMediaKeys(initialConfig.settings.hardwareMediaKeys);
   syncGlobalSummonShortcut(initialConfig.settings.globalSummonShortcut);
@@ -1410,6 +1598,7 @@ if (!gotSingleInstanceLock) {
 
   app.on('before-quit', (event) => {
     forceQuitting = true;
+    void lanSyncServer?.stop();
     const shouldFlushAudible =
       !audibleFlushedOnQuit &&
       store?.get().settings.powerUps.audibleWhisperSyncFlush &&

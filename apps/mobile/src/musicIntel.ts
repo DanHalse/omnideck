@@ -13,7 +13,7 @@ import {
 
 const CACHE_PREFIX = 'omnideck:mobile-music-cache:v1:';
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const USER_AGENT = 'OmniDeck-Android/1.5.9 (https://github.com/DanHalse/omnideck)';
+const USER_AGENT = 'OmniDeck-Android/1.6.0 (https://github.com/DanHalse/omnideck)';
 
 async function fetchJson<T>(
   url: string,

@@ -8,12 +8,31 @@ import type {
   DesktopSnapshot,
   EqualizerConfig,
   IntegrationsConfig,
+  LanSyncStatus,
   ListeningStatsSummary,
   PowerUpsConfig,
   ServiceDefinition,
   SuggestedBand,
   UpdateState,
 } from '@omnideck/shared';
+
+export interface AudibleDeckChapter {
+  index: number;
+  title: string;
+  active: boolean;
+}
+
+export interface AudibleDeckState {
+  title: string;
+  chapter: string;
+  cover: string;
+  playing: boolean;
+  currentTimeSec: number;
+  durationSec: number;
+  playbackRate: number;
+  chapters: AudibleDeckChapter[];
+  endOfChapterArmed: boolean;
+}
 
 export interface OmniDeckBridge {
   getSnapshot: () => Promise<DesktopSnapshot>;
@@ -59,6 +78,10 @@ export interface OmniDeckBridge {
   triggerPip: (serviceId: string) => Promise<void>;
   toggleAlwaysOnTop: () => Promise<DesktopSnapshot>;
   closeAudibleDock: () => Promise<DesktopSnapshot>;
+  audibleDeckControl: (
+    action: 'state' | 'playPause' | 'skip' | 'seek' | 'rate' | 'selectChapter' | 'toggleEndOfChapterSleep',
+    value?: number,
+  ) => Promise<AudibleDeckState | null>;
   updateEqualizer: (patch: Partial<EqualizerConfig>) => Promise<DesktopSnapshot>;
 
   // AI Now Playing & Artist Discovery Hub
@@ -103,14 +126,20 @@ export interface OmniDeckBridge {
   saveCustomWorkspace: (name: string) => Promise<DesktopSnapshot>;
   deleteCustomWorkspace: (workspaceId: string) => Promise<DesktopSnapshot>;
 
-  // Settings, Power-Ups, Trashbin, Book Notes, Integrations, Services & Cross-Device Sync
+  // Settings, Power-Ups, Trashbin, Anti-Slop Whitelist, Book Notes, Multi-Stream, Integrations, LAN Sync & Services
   updateSettings: (patch: Partial<AppSettings>) => Promise<DesktopSnapshot>;
   updatePowerUps: (patch: Partial<PowerUpsConfig>) => Promise<DesktopSnapshot>;
   updateIntegrations: (patch: Partial<IntegrationsConfig>) => Promise<DesktopSnapshot>;
   blockMusic: (input: { kind: 'artist' | 'track'; value: string; artist?: string }) => Promise<DesktopSnapshot>;
   unblockMusic: (entryId: string) => Promise<DesktopSnapshot>;
+  whitelistArtist: (artistName: string) => Promise<DesktopSnapshot>;
+  removeWhitelistedArtist: (artistName: string) => Promise<DesktopSnapshot>;
+  setTwitchMultiStreamChannels: (channels: string[]) => Promise<DesktopSnapshot>;
   addBookNote: (input: { bookTitle: string; timestampLabel: string; note: string; url?: string }) => Promise<DesktopSnapshot>;
   removeBookNote: (noteId: string) => Promise<DesktopSnapshot>;
+  lanSyncStart: () => Promise<LanSyncStatus>;
+  lanSyncStop: () => Promise<LanSyncStatus>;
+  lanSyncRegeneratePin: () => Promise<LanSyncStatus>;
   addCustomService: (input: CustomServiceInput) => Promise<DesktopSnapshot>;
   updateService: (
     serviceId: string,
@@ -155,6 +184,8 @@ export type UiCommandEvent =
   | { type: 'open-service-manager' }
   | { type: 'open-command-palette' }
   | { type: 'open-audio-mixer'; tab?: 'mixer' | 'eq' }
+  | { type: 'open-audible-deck' }
+  | { type: 'open-twitch-multistream' }
   | { type: 'toggle-now-playing'; mode?: 'drawer' | 'stage' }
   | { type: 'toggle-browser-bar' }
   | { type: 'close-overlays' };

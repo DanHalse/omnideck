@@ -488,6 +488,8 @@ module.exports = function withAndroidSelfUpdater(config) {
 
     const app = manifest.application?.[0];
     if (app) {
+      app.$ = app.$ || {};
+      app.$['android:usesCleartextTraffic'] = 'true';
       if (!Array.isArray(app.provider)) {
         app.provider = [];
       }

@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import {
   AI_PROVIDER_DEFAULT_MODELS,
+  SKIN_PRESET_LIST,
   type AiCompanionConfig,
   type AiProviderId,
   type AppSettings,
@@ -367,6 +368,41 @@ export function SettingsModal({
               {/* Appearance & Navigation */}
               <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <h3 className="section-label">Appearance &amp; Navigation</h3>
+
+                <div className="setting-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
+                  <div>
+                    <div className="setting-row__title">Unified OmniDeck Skin Engine</div>
+                    <div className="setting-row__desc">
+                      Reskins both OmniDeck&apos;s shell and all 6 embedded apps (including Audible Dark Mode &amp; Soft Daylight YouTube Music).
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {SKIN_PRESET_LIST.map((preset) => {
+                      const active = settings.skin === preset.id;
+                      return (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          className={`pill-btn ${active ? 'pill-btn--active' : ''}`}
+                          title={preset.tagline}
+                          onClick={() => void onUpdateSettings({ skin: preset.id })}
+                          style={{ gap: 6 }}
+                        >
+                          <span
+                            style={{
+                              width: 10,
+                              height: 10,
+                              borderRadius: 999,
+                              background: preset.accent,
+                              border: `1.5px solid ${preset.canvas}`,
+                            }}
+                          />
+                          <span>{preset.name}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
 
                 <div className="setting-row">
                   <div>
@@ -879,10 +915,55 @@ export function SettingsModal({
                     }),
                 )}
                 {renderToggleRow(
-                  'YouTube Music: Playlist Quick-Filter & Queue Total Duration',
-                  'Adds an instant track/artist filter box atop large playlists and shows total remaining queue time in Up Next.',
-                  pu.ytmPlaylistQuickFilter,
-                  () => void onUpdatePowerUps({ ytmPlaylistQuickFilter: !pu.ytmPlaylistQuickFilter }),
+                  'YouTube: Start Directly on Subscriptions Feed',
+                  'Redirects YouTube homepage directly to /feed/subscriptions instead of the algorithmic Home feed.',
+                  pu.youtubeStartOnSubscriptions,
+                  () =>
+                    void onUpdatePowerUps({
+                      youtubeStartOnSubscriptions: !pu.youtubeStartOnSubscriptions,
+                    }),
+                )}
+                {renderToggleRow(
+                  'YouTube: 1-Click Thumbnail Quick Actions (+WL / +Queue)',
+                  'Adds instant Watch Later and Add-to-Queue buttons onto video thumbnails (restoring what YouTube buried in ⋮ menus).',
+                  pu.youtubeQuickThumbActions,
+                  () =>
+                    void onUpdatePowerUps({
+                      youtubeQuickThumbActions: !pu.youtubeQuickThumbActions,
+                    }),
+                )}
+                {renderToggleRow(
+                  'YouTube: Classic Watch Layout Lock & Dim Watched Videos',
+                  'Tames oversized 2025–2026 player buttons, hides AI summary / merch clutter, and dims videos already watched past 85%.',
+                  pu.youtubeClassicLayoutLock && pu.youtubeHideWatched,
+                  () => {
+                    const next = !(pu.youtubeClassicLayoutLock && pu.youtubeHideWatched);
+                    void onUpdatePowerUps({
+                      youtubeClassicLayoutLock: next,
+                      youtubeHideWatched: next,
+                    });
+                  },
+                )}
+                {renderToggleRow(
+                  'YouTube Music: Playlist Quick-Filter, Sorter & Duplicate Finder',
+                  'Adds live track/artist filtering, A–Z / Artist / Shortest sorting, duplicate highlighting, and Queue Total Duration.',
+                  pu.ytmPlaylistQuickFilter && pu.ytmPlaylistSorter,
+                  () => {
+                    const next = !(pu.ytmPlaylistQuickFilter && pu.ytmPlaylistSorter);
+                    void onUpdatePowerUps({
+                      ytmPlaylistQuickFilter: next,
+                      ytmPlaylistSorter: next,
+                    });
+                  },
+                )}
+                {renderToggleRow(
+                  'YouTube Music: Smart Fade Transitions',
+                  'Applies smooth multiplicative fade-out/in between tracks on YouTube Music.',
+                  pu.ytmSmartFadeAndSilenceTrim,
+                  () =>
+                    void onUpdatePowerUps({
+                      ytmSmartFadeAndSilenceTrim: !pu.ytmSmartFadeAndSilenceTrim,
+                    }),
                 )}
                 {renderToggleRow(
                   'YouTube Music: Audio-Only Stage Mode',
@@ -892,11 +973,17 @@ export function SettingsModal({
                 )}
               </section>
 
-              {/* Universal Music Trashbin (Auto-Skip Blocklist) */}
+              {/* Universal Music Trashbin & Anti-Slop Shield */}
               <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <h3 className="section-label">
-                  Universal Music Trashbin — Blocked Artists &amp; Songs ({settings.blockedMusic.length})
+                  Universal Music Trashbin &amp; Anti-Slop Shield ({settings.blockedMusic.length} blocked)
                 </h3>
+                {renderToggleRow(
+                  'Auto-Skip Unverified / Likely AI-Slop Artists',
+                  'Automatically skips tracks from artists with zero MusicBrainz/Wikipedia/Deezer catalog history (whitelist human indie artists anytime in Music Deck).',
+                  settings.autoSkipAiSlop,
+                  () => void onUpdateSettings({ autoSkipAiSlop: !settings.autoSkipAiSlop }),
+                )}
                 <div className="setting-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
                   <div className="setting-row__desc">
                     Any artist or track blocked from the Mini-Player HUD or Artist Hub is automatically skipped across YouTube Music &amp; Spotify.
@@ -972,6 +1059,12 @@ export function SettingsModal({
               <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <h3 className="section-label">Audible Desktop Suite</h3>
                 {renderToggleRow(
+                  'Native Dark Mode for Audible Library & Cloud Player',
+                  'Applies OmniDeck\'s active dark skin across audible.* pages and Cloud Player so nighttime listening never blinds you.',
+                  pu.audibleDarkMode,
+                  () => void onUpdatePowerUps({ audibleDarkMode: !pu.audibleDarkMode }),
+                )}
+                {renderToggleRow(
                   'Direct-to-Library Launch',
                   'Skips the Audible storefront and opens straight to your /library/titles collection.',
                   pu.audibleDirectToLibrary,
@@ -1018,6 +1111,24 @@ export function SettingsModal({
               {/* Reddit */}
               <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <h3 className="section-label">Reddit (Modern RES Suite)</h3>
+                {renderToggleRow(
+                  'Apollo-Style Color-Coded Comment Depth Bars',
+                  'Adds pastel vertical nesting guides for nested comment threads on both Modern & Old Reddit.',
+                  pu.redditColorDepthLines,
+                  () => void onUpdatePowerUps({ redditColorDepthLines: !pu.redditColorDepthLines }),
+                )}
+                {renderToggleRow(
+                  'Exact Local Timestamps & Visited-Post Dimmer (+ Hide Read)',
+                  'Shows exact local date/time on hover and softly dims threads you already opened with a floating Hide Read toggle.',
+                  pu.redditExactTimestamps,
+                  () => void onUpdatePowerUps({ redditExactTimestamps: !pu.redditExactTimestamps }),
+                )}
+                {renderToggleRow(
+                  'Kill Reddit Video Infinite Scroll Hijack',
+                  'Stops scrolling on a video post from jumping into a TikTok-style video reel instead of comments.',
+                  pu.redditKillVideoScroll,
+                  () => void onUpdatePowerUps({ redditKillVideoScroll: !pu.redditKillVideoScroll }),
+                )}
                 {renderToggleRow(
                   'Compact Desktop Density',
                   'Tightens card spacing and widens the desktop feed layout on Modern Reddit.',
@@ -1143,6 +1254,15 @@ export function SettingsModal({
               {/* Spotify */}
               <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <h3 className="section-label">Spotify</h3>
+                {renderToggleRow(
+                  'Smart Shuffle Guard ("Real Shuffle Only")',
+                  'Automatically cycles out of Spotify Smart Shuffle back to normal Shuffle so promoted tracks don\'t hijack playlists.',
+                  pu.spotifyGuardSmartShuffle,
+                  () =>
+                    void onUpdatePowerUps({
+                      spotifyGuardSmartShuffle: !pu.spotifyGuardSmartShuffle,
+                    }),
+                )}
                 {renderToggleRow(
                   'Music-Only Mode (Hide Podcasts & Audiobooks + Queue Duration)',
                   'Hides Podcast/Episode/Audiobook shelves from Spotify Home and shows total queue duration in Queue.',

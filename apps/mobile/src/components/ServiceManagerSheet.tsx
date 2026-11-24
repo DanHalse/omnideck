@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Linking,
   Modal,
@@ -14,9 +14,11 @@ import {
   APP_VERSION,
   GITHUB_RELEASES_URL,
   normalizeServiceUrl,
+  SKIN_PRESET_LIST,
   type CustomServiceInput,
   type PowerUpsConfig,
   type ServiceDefinition,
+  type SkinPresetId,
   type ThemeMode,
   type WorkspacePreset,
 } from '@omnideck/shared';
@@ -27,11 +29,13 @@ import {
   type OtaRuntimeState,
   resetOtaBundle,
 } from '../otaUpdater';
+import { loadSavedLanPairing } from '../lanSync';
 
 interface ServiceManagerSheetProps {
   visible: boolean;
   palette: MobilePalette;
   theme: ThemeMode;
+  skin: SkinPresetId;
   services: ServiceDefinition[];
   workspaces: WorkspacePreset[];
   activeWorkspaceId: string;
@@ -44,11 +48,15 @@ interface ServiceManagerSheetProps {
   updateStatusText: string;
   onClose: () => void;
   onToggleTheme: () => void;
+  onSelectSkin: (skin: SkinPresetId) => void;
   onSleepInactive: () => void;
   onSetSleepTimer: (minutes: number) => void;
   onTogglePowerUp: (key: keyof PowerUpsConfig) => void;
   onCheckUpdates: () => Promise<void>;
   onInstallUpdate: () => Promise<void>;
+  onSyncWithPc: (hostUrl: string, pin: string) => Promise<string>;
+  onPullFromPc: (hostUrl: string, pin: string) => Promise<string>;
+  onSendToPc: (hostUrl: string, pin: string) => Promise<string>;
   onApplyWorkspace: (workspaceId: string) => void;
   onReorder: (fromIndex: number, toIndex: number) => void;
   onToggleVisibility: (id: string) => void;
@@ -62,8 +70,12 @@ const MOBILE_POWER_UP_ITEMS: Array<{ key: keyof PowerUpsConfig; label: string }>
   { key: 'youtubeReturnDislikes', label: 'YT Dislikes' },
   { key: 'youtubeSponsorBlock', label: 'SponsorBlock' },
   { key: 'youtubeHideShorts', label: 'Hide Shorts' },
+  { key: 'youtubeStartOnSubscriptions', label: 'YT Subs Start' },
   { key: 'youtubeHideEndScreens', label: 'No End Cards' },
-  { key: 'youtubeAutoDismissStillListening', label: 'Auto-Dismiss' },
+  { key: 'audibleDarkMode', label: 'Audible Dark' },
+  { key: 'twitchFollowedFirstMobile', label: 'Twitch Followed' },
+  { key: 'spotifyGuardSmartShuffle', label: 'Real Shuffle' },
+  { key: 'redditColorDepthLines', label: 'Reddit Depth Bars' },
   { key: 'redditHidePromoted', label: 'No Reddit Ads' },
   { key: 'redditCollapseAutoMod', label: 'Hide AutoMod' },
   { key: 'redditNextCommentButton', label: 'Next Comment ↓' },
@@ -73,6 +85,7 @@ export function ServiceManagerSheet({
   visible,
   palette,
   theme,
+  skin,
   services,
   workspaces,
   activeWorkspaceId,
@@ -85,11 +98,15 @@ export function ServiceManagerSheet({
   updateStatusText,
   onClose,
   onToggleTheme,
+  onSelectSkin,
   onSleepInactive,
   onSetSleepTimer,
   onTogglePowerUp,
   onCheckUpdates,
   onInstallUpdate,
+  onSyncWithPc,
+  onPullFromPc,
+  onSendToPc,
   onApplyWorkspace,
   onReorder,
   onToggleVisibility,
@@ -103,6 +120,18 @@ export function ServiceManagerSheet({
   const [desktopUa, setDesktopUa] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [syncJson, setSyncJson] = useState('');
+  const [lanHost, setLanHost] = useState('');
+  const [lanPin, setLanPin] = useState('');
+  const [lanBusy, setLanBusy] = useState(false);
+  const [lanStatus, setLanStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!visible) return;
+    void loadSavedLanPairing().then((saved) => {
+      if (saved.hostUrl) setLanHost(saved.hostUrl);
+      if (saved.pin) setLanPin(saved.pin);
+    });
+  }, [visible]);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
 
   const visibleCount = services.filter((s) => !s.hidden).length;
@@ -255,7 +284,179 @@ export function ServiceManagerSheet({
             </View>
 
             <Text style={[styles.sectionTitle, { color: palette.inkMuted }]}>
-              POWER-UPS (YOUTUBE, REDDIT &amp; MUSIC)
+              UNIFIED SKIN ENGINE (SHELL + ALL 6 APPS)
+            </Text>
+            <View style={styles.wsWrap}>
+              {SKIN_PRESET_LIST.map((preset) => {
+                const active = skin === preset.id;
+                return (
+                  <Pressable
+                    key={preset.id}
+                    onPress={() => onSelectSkin(preset.id)}
+                    style={[
+                      styles.wsChip,
+                      {
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 6,
+                        backgroundColor: active ? palette.accentSoft : palette.surface,
+                        borderColor: active ? palette.accent : palette.border,
+                      },
+                    ]}
+                  >
+                    <View
+                      style={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: 5,
+                        backgroundColor: preset.accent,
+                        borderWidth: 1,
+                        borderColor: preset.canvas,
+                      }}
+                    />
+                    <Text
+                      style={{
+                        color: active ? palette.accent : palette.inkPrimary,
+                        fontSize: 12,
+                        fontWeight: '700',
+                      }}
+                    >
+                      {preset.name}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <Text style={[styles.sectionTitle, { color: palette.inkMuted }]}>
+              PC ↔ ANDROID WI-FI SYNC &amp; PLAYBACK HANDOFF
+            </Text>
+            <View
+              style={[
+                styles.otaCard,
+                { backgroundColor: palette.surface, borderColor: palette.border },
+              ]}
+            >
+              <Text style={{ color: palette.inkSecondary, fontSize: 11.5 }}>
+                Start Wi-Fi Sync in OmniDeck Desktop Hub, then enter the address &amp; 6-digit PIN below.
+              </Text>
+              <View style={{ flexDirection: 'row', gap: 6 }}>
+                <TextInput
+                  value={lanHost}
+                  onChangeText={setLanHost}
+                  placeholder="http://192.168.1.50:47831"
+                  placeholderTextColor={palette.inkMuted}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  style={[
+                    styles.input,
+                    {
+                      flex: 1.5,
+                      color: palette.inkPrimary,
+                      backgroundColor: palette.input,
+                      borderColor: palette.border,
+                    },
+                  ]}
+                />
+                <TextInput
+                  value={lanPin}
+                  onChangeText={setLanPin}
+                  placeholder="6-digit PIN"
+                  placeholderTextColor={palette.inkMuted}
+                  keyboardType="number-pad"
+                  maxLength={6}
+                  style={[
+                    styles.input,
+                    {
+                      flex: 0.9,
+                      color: palette.inkPrimary,
+                      backgroundColor: palette.input,
+                      borderColor: palette.border,
+                    },
+                  ]}
+                />
+              </View>
+              <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
+                <Pressable
+                  disabled={lanBusy}
+                  onPress={() => {
+                    setLanBusy(true);
+                    setLanStatus('Syncing over Wi-Fi…');
+                    void onSyncWithPc(lanHost, lanPin)
+                      .then((msg) => setLanStatus(msg))
+                      .catch((e: unknown) => setLanStatus(e instanceof Error ? e.message : 'Sync failed'))
+                      .finally(() => setLanBusy(false));
+                  }}
+                  style={[
+                    styles.otaBtn,
+                    { backgroundColor: palette.accent, opacity: lanBusy ? 0.6 : 1 },
+                  ]}
+                >
+                  <Text style={{ color: '#FFFFFF', fontSize: 11.5, fontWeight: '700' }}>
+                    Sync Settings
+                  </Text>
+                </Pressable>
+                <Pressable
+                  disabled={lanBusy}
+                  onPress={() => {
+                    setLanBusy(true);
+                    setLanStatus('Pulling playback from PC…');
+                    void onPullFromPc(lanHost, lanPin)
+                      .then((msg) => {
+                        setLanStatus(msg);
+                        onClose();
+                      })
+                      .catch((e: unknown) => setLanStatus(e instanceof Error ? e.message : 'Handoff failed'))
+                      .finally(() => setLanBusy(false));
+                  }}
+                  style={[
+                    styles.otaBtn,
+                    {
+                      backgroundColor: palette.chromeElevated,
+                      borderWidth: StyleSheet.hairlineWidth,
+                      borderColor: palette.border,
+                      opacity: lanBusy ? 0.6 : 1,
+                    },
+                  ]}
+                >
+                  <Text style={{ color: palette.inkPrimary, fontSize: 11.5, fontWeight: '700' }}>
+                    Continue from PC
+                  </Text>
+                </Pressable>
+                <Pressable
+                  disabled={lanBusy}
+                  onPress={() => {
+                    setLanBusy(true);
+                    setLanStatus('Sending to PC…');
+                    void onSendToPc(lanHost, lanPin)
+                      .then((msg) => setLanStatus(msg))
+                      .catch((e: unknown) => setLanStatus(e instanceof Error ? e.message : 'Send failed'))
+                      .finally(() => setLanBusy(false));
+                  }}
+                  style={[
+                    styles.otaBtn,
+                    {
+                      backgroundColor: palette.chromeElevated,
+                      borderWidth: StyleSheet.hairlineWidth,
+                      borderColor: palette.border,
+                      opacity: lanBusy ? 0.6 : 1,
+                    },
+                  ]}
+                >
+                  <Text style={{ color: palette.inkPrimary, fontSize: 11.5, fontWeight: '700' }}>
+                    Send to PC
+                  </Text>
+                </Pressable>
+              </View>
+              {lanStatus && (
+                <Text style={{ color: palette.accent, fontSize: 11.5, fontWeight: '600' }}>
+                  {lanStatus}
+                </Text>
+              )}
+            </View>
+
+            <Text style={[styles.sectionTitle, { color: palette.inkMuted }]}>
+              POWER-UPS (ALL 6 APPS)
             </Text>
             <View style={styles.wsWrap}>
               {MOBILE_POWER_UP_ITEMS.map((item) => {
@@ -643,5 +844,18 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '700',
     fontSize: 13.5,
+  },
+  otaCard: {
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    gap: 8,
+  },
+  otaBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

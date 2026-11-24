@@ -1,4 +1,9 @@
-import type { ThemeMode } from '@omnideck/shared';
+import {
+  resolveSkinPreset,
+  SKIN_PRESETS,
+  type SkinPresetId,
+  type ThemeMode,
+} from '@omnideck/shared';
 
 export interface MobilePalette {
   canvas: string;
@@ -17,37 +22,35 @@ export interface MobilePalette {
   danger: string;
 }
 
+function toMobilePalette(skinId: SkinPresetId): MobilePalette {
+  const s = SKIN_PRESETS[skinId];
+  return {
+    canvas: s.canvas,
+    chrome: s.chrome,
+    chromeElevated: s.chromeElevated,
+    surface: s.surface,
+    surfaceActive: s.surfaceActive,
+    input: s.input,
+    border: s.borderDefault,
+    inkPrimary: s.inkPrimary,
+    inkSecondary: s.inkSecondary,
+    inkMuted: s.inkMuted,
+    accent: s.accent,
+    accentSoft: s.accentSoft,
+    live: s.live,
+    danger: s.danger,
+  };
+}
+
 export const MOBILE_PALETTES: Record<ThemeMode, MobilePalette> = {
-  dark: {
-    canvas: '#0D0F12',
-    chrome: '#13161B',
-    chromeElevated: '#191D24',
-    surface: '#1F242D',
-    surfaceActive: '#2A313D',
-    input: '#101317',
-    border: 'rgba(255, 255, 255, 0.09)',
-    inkPrimary: '#F1F3F6',
-    inkSecondary: '#9AA3B2',
-    inkMuted: '#687283',
-    accent: '#E47E3C',
-    accentSoft: 'rgba(228, 126, 60, 0.16)',
-    live: '#22C55E',
-    danger: '#EF4444',
-  },
-  light: {
-    canvas: '#F2F4F7',
-    chrome: '#FFFFFF',
-    chromeElevated: '#F7F8FA',
-    surface: '#EDF0F5',
-    surfaceActive: '#DFE5EE',
-    input: '#FFFFFF',
-    border: 'rgba(15, 23, 42, 0.10)',
-    inkPrimary: '#11161F',
-    inkSecondary: '#4E596A',
-    inkMuted: '#7B8698',
-    accent: '#CF6523',
-    accentSoft: 'rgba(207, 101, 35, 0.14)',
-    live: '#16A34A',
-    danger: '#DC2626',
-  },
+  dark: toMobilePalette('obsidian'),
+  light: toMobilePalette('daylight'),
 };
+
+export function getMobilePalette(
+  skin?: SkinPresetId,
+  fallbackTheme?: ThemeMode,
+): MobilePalette {
+  const resolved = resolveSkinPreset(skin, fallbackTheme);
+  return toMobilePalette(resolved.id);
+}

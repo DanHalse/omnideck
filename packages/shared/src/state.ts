@@ -1,5 +1,6 @@
 import { DEFAULT_SERVICES } from './services.js';
 import { DEFAULT_POWER_UPS, mergePowerUpsConfig } from './powerUps.js';
+import { isValidSkinPresetId, resolveSkinPreset } from './skins.js';
 import {
   DEFAULT_AI_COMPANION_CONFIG,
   DEFAULT_EQUALIZER_CONFIG,
@@ -23,12 +24,13 @@ import type {
   RecentActivityItem,
   ServiceDefinition,
   ServiceRuntimeState,
+  SkinPresetId,
   StageLayoutMetrics,
   WindowBounds,
   WorkspacePreset,
 } from './types.js';
 
-export const APP_VERSION = '1.5.9';
+export const APP_VERSION = '1.6.0';
 export const GITHUB_REPO_OWNER = 'DanHalse';
 export const GITHUB_REPO_NAME = 'omnideck';
 export const GITHUB_RELEASES_URL = `https://github.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases`;
@@ -36,6 +38,7 @@ export const GITHUB_RELEASES_URL = `https://github.com/${GITHUB_REPO_OWNER}/${GI
 export const DEFAULT_SETTINGS: AppSettings = {
   navPosition: 'top',
   theme: 'dark',
+  skin: 'obsidian',
   appChromeMode: 'zen',
   nativePolishCss: true,
   smartLinkRouting: true,
@@ -56,11 +59,19 @@ export const DEFAULT_SETTINGS: AppSettings = {
   doNotDisturb: false,
   autoCheckUpdates: true,
   hardwareVideoAcceleration: true,
-  powerUps: { ...DEFAULT_POWER_UPS, redditFilteredKeywords: [...DEFAULT_POWER_UPS.redditFilteredKeywords] },
+  powerUps: {
+    ...DEFAULT_POWER_UPS,
+    redditFilteredKeywords: [...DEFAULT_POWER_UPS.redditFilteredKeywords],
+    youtubeBlockedChannels: [...DEFAULT_POWER_UPS.youtubeBlockedChannels],
+    twitchChatHighlights: [...DEFAULT_POWER_UPS.twitchChatHighlights],
+  },
   equalizer: { ...DEFAULT_EQUALIZER_CONFIG, bands: [...DEFAULT_EQUALIZER_CONFIG.bands] },
   aiCompanion: { ...DEFAULT_AI_COMPANION_CONFIG },
   blockedMusic: [],
+  autoSkipAiSlop: false,
+  whitelistedArtists: [],
   bookNotes: [],
+  twitchMultiStreamChannels: [],
   integrations: { ...DEFAULT_INTEGRATIONS_CONFIG },
 };
 
@@ -111,11 +122,19 @@ export function createDefaultConfig(): PersistedConfig {
     },
     settings: {
       ...DEFAULT_SETTINGS,
-      powerUps: { ...DEFAULT_POWER_UPS, redditFilteredKeywords: [...DEFAULT_POWER_UPS.redditFilteredKeywords] },
+      powerUps: {
+        ...DEFAULT_POWER_UPS,
+        redditFilteredKeywords: [...DEFAULT_POWER_UPS.redditFilteredKeywords],
+        youtubeBlockedChannels: [...DEFAULT_POWER_UPS.youtubeBlockedChannels],
+        twitchChatHighlights: [...DEFAULT_POWER_UPS.twitchChatHighlights],
+      },
       equalizer: { ...DEFAULT_EQUALIZER_CONFIG, bands: [...DEFAULT_EQUALIZER_CONFIG.bands] },
       aiCompanion: { ...DEFAULT_AI_COMPANION_CONFIG },
       blockedMusic: [],
+      autoSkipAiSlop: false,
+      whitelistedArtists: [],
       bookNotes: [],
+      twitchMultiStreamChannels: [],
       integrations: { ...DEFAULT_INTEGRATIONS_CONFIG },
     },
     workspaces: DEFAULT_WORKSPACES.map((w) => ({ ...w, serviceIds: [...w.serviceIds] })),
@@ -229,9 +248,43 @@ export function mergePersistedConfig(raw: unknown): PersistedConfig {
         ? 'pause'
         : 'off';
 
+  const legacyTheme = candidate.settings?.theme === 'light' ? 'light' : 'dark';
+  let skin: SkinPresetId = isValidSkinPresetId(candidate.settings?.skin)
+    ? candidate.settings.skin
+    : legacyTheme === 'light'
+      ? 'daylight'
+      : 'obsidian';
+  if (legacyTheme === 'light' && skin === 'obsidian') {
+    skin = 'daylight';
+  }
+  const resolvedTheme = resolveSkinPreset(skin, legacyTheme).baseTheme;
+
+  const whitelistedArtists = Array.isArray(candidate.settings?.whitelistedArtists)
+    ? Array.from(
+        new Set(
+          candidate.settings.whitelistedArtists
+            .filter((v): v is string => typeof v === 'string')
+            .map((v) => v.trim().slice(0, 120))
+            .filter(Boolean),
+        ),
+      ).slice(0, 250)
+    : [];
+
+  const twitchMultiStreamChannels = Array.isArray(candidate.settings?.twitchMultiStreamChannels)
+    ? Array.from(
+        new Set(
+          candidate.settings.twitchMultiStreamChannels
+            .filter((v): v is string => typeof v === 'string')
+            .map((v) => v.trim().toLowerCase().replace(/^@/, ''))
+            .filter((v) => /^[a-z0-9_]{2,25}$/.test(v)),
+        ),
+      ).slice(0, 4)
+    : [];
+
   const settings: AppSettings = {
     navPosition: candidate.settings?.navPosition === 'left' ? 'left' : 'top',
-    theme: candidate.settings?.theme === 'light' ? 'light' : 'dark',
+    theme: resolvedTheme,
+    skin,
     appChromeMode: candidate.settings?.appChromeMode === 'classic' ? 'classic' : 'zen',
     nativePolishCss:
       typeof candidate.settings?.nativePolishCss === 'boolean'
@@ -309,7 +362,13 @@ export function mergePersistedConfig(raw: unknown): PersistedConfig {
     equalizer: mergeEqualizerConfig(candidate.settings?.equalizer),
     aiCompanion: mergeAiCompanionConfig(candidate.settings?.aiCompanion),
     blockedMusic: normalizeBlockedMusic(candidate.settings?.blockedMusic),
+    autoSkipAiSlop:
+      typeof candidate.settings?.autoSkipAiSlop === 'boolean'
+        ? candidate.settings.autoSkipAiSlop
+        : DEFAULT_SETTINGS.autoSkipAiSlop,
+    whitelistedArtists,
     bookNotes: normalizeBookNotes(candidate.settings?.bookNotes),
+    twitchMultiStreamChannels,
     integrations: mergeIntegrationsConfig(candidate.settings?.integrations),
   };
 
@@ -1254,4 +1313,58 @@ export function removeBookNote(config: PersistedConfig, noteId: string): Persist
     },
   };
 }
+
+export function whitelistArtist(config: PersistedConfig, artistName: string): PersistedConfig {
+  const clean = artistName.trim().slice(0, 120);
+  if (!clean) return config;
+  const existing = config.settings.whitelistedArtists ?? [];
+  if (existing.some((a) => a.toLowerCase() === clean.toLowerCase())) return config;
+  return {
+    ...config,
+    settings: {
+      ...config.settings,
+      whitelistedArtists: [clean, ...existing].slice(0, 250),
+    },
+  };
+}
+
+export function removeWhitelistedArtist(config: PersistedConfig, artistName: string): PersistedConfig {
+  const target = artistName.trim().toLowerCase();
+  return {
+    ...config,
+    settings: {
+      ...config.settings,
+      whitelistedArtists: (config.settings.whitelistedArtists ?? []).filter(
+        (a) => a.toLowerCase() !== target,
+      ),
+    },
+  };
+}
+
+export function isArtistWhitelisted(whitelistedArtists: string[] | undefined, artistName?: string): boolean {
+  if (!artistName || !whitelistedArtists?.length) return false;
+  const target = artistName.trim().toLowerCase();
+  return whitelistedArtists.some((a) => a.toLowerCase() === target);
+}
+
+export function setTwitchMultiStreamChannels(
+  config: PersistedConfig,
+  channels: string[],
+): PersistedConfig {
+  const sanitized = Array.from(
+    new Set(
+      channels
+        .map((c) => c.trim().toLowerCase().replace(/^@/, ''))
+        .filter((c) => /^[a-z0-9_]{2,25}$/.test(c)),
+    ),
+  ).slice(0, 4);
+  return {
+    ...config,
+    settings: {
+      ...config.settings,
+      twitchMultiStreamChannels: sanitized,
+    },
+  };
+}
+
 

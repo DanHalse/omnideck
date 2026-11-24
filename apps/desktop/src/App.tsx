@@ -16,6 +16,8 @@ import { AudioMixerModal, type AudioMixerTab } from './components/AudioMixerModa
 import { ServiceManagerModal } from './components/ServiceManagerModal';
 import { SettingsModal, type SettingsTab } from './components/SettingsModal';
 import { NowPlayingHub, type NowPlayingMode } from './components/NowPlayingHub';
+import { AudibleDeckModal } from './components/AudibleDeckModal';
+import { TwitchMultiStreamModal } from './components/TwitchMultiStreamModal';
 import {
   ArrowLeftIcon,
   CloseIcon,
@@ -30,7 +32,7 @@ import {
   WindowRestoreIcon,
 } from './components/Icons';
 
-type ModalState = 'none' | 'settings' | 'manage' | 'palette' | 'mixer';
+type ModalState = 'none' | 'settings' | 'manage' | 'palette' | 'mixer' | 'audible-deck' | 'twitch-multistream';
 
 const DRAWER_WIDTH = 380;
 
@@ -67,6 +69,12 @@ export function App() {
         setMixerTab(cmd.tab ?? 'mixer');
         setModal((cur) => (cur === 'mixer' ? 'none' : 'mixer'));
       }
+      if (cmd.type === 'open-audible-deck') {
+        setModal((cur) => (cur === 'audible-deck' ? 'none' : 'audible-deck'));
+      }
+      if (cmd.type === 'open-twitch-multistream') {
+        setModal((cur) => (cur === 'twitch-multistream' ? 'none' : 'twitch-multistream'));
+      }
       if (cmd.type === 'toggle-now-playing') {
         if (cmd.mode) {
           setNowPlayingMode((cur) => (cur === cmd.mode ? 'closed' : cmd.mode!));
@@ -90,8 +98,10 @@ export function App() {
 
   useEffect(() => {
     const theme = snapshot?.config.settings.theme ?? 'dark';
+    const skin = snapshot?.config.settings.skin ?? (theme === 'light' ? 'daylight' : 'obsidian');
     document.documentElement.setAttribute('data-theme', theme);
-  }, [snapshot?.config.settings.theme]);
+    document.documentElement.setAttribute('data-skin', skin);
+  }, [snapshot?.config.settings.theme, snapshot?.config.settings.skin]);
 
   // Trigger a silent automatic update check immediately on first launch
   useEffect(() => {
@@ -256,6 +266,7 @@ export function App() {
     sleepTimer,
     update,
     drm,
+    lanSync,
     homeActive,
     alwaysOnTop,
     isMaximized,
@@ -622,6 +633,20 @@ export function App() {
             sleepTimer={sleepTimer}
             listeningStats={listeningStats}
             bookNotes={config.settings.bookNotes}
+            activeSkin={config.settings.skin}
+            lanSync={lanSync}
+            onSelectSkin={(skin) => void api.updateSettings({ skin })}
+            onOpenAudibleDeck={() => setModal('audible-deck')}
+            onOpenMusicDeck={() => setNowPlayingMode('stage')}
+            onOpenTwitchMultiStream={() => setModal('twitch-multistream')}
+            onToggleLanSync={() => {
+              if (lanSync.running) {
+                void api.lanSyncStop();
+              } else {
+                void api.lanSyncStart();
+              }
+            }}
+            onRegenerateLanPin={() => void api.lanSyncRegeneratePin()}
             onSelectService={(id) => void api.selectService(id)}
             onOpenInSplit={(id) => void api.toggleSplitView(true, id)}
             onOpenUrlInService={(id, url) => void api.openServiceUrl(id, url)}
@@ -669,6 +694,8 @@ export function App() {
             nowPlaying={nowPlaying}
             services={config.services}
             aiConfig={config.settings.aiCompanion}
+            autoSkipAiSlop={config.settings.autoSkipAiSlop}
+            whitelistedArtists={config.settings.whitelistedArtists}
             topOffset={topBarHeight + updateBannerHeight + browserStripHeight}
             bottomOffset={bottomDockHeight}
             onClose={() => setNowPlayingMode('closed')}
@@ -678,6 +705,14 @@ export function App() {
             onPlayPause={(id) => void api.mediaPlayPause(id)}
             onPrevious={(id) => void api.mediaPrevious(id)}
             onNext={(id) => void api.mediaNext(id)}
+            onSeek={(targetSec, id) => void api.mediaSeek(targetSec, id)}
+            onSetVolume={(id, vol) => void api.setVolume(id, vol)}
+            onLike={(id) => void api.mediaLikeTrack(id)}
+            onDislike={(id) => void api.mediaDislikeTrack(id)}
+            onToggleAutoSkipAiSlop={() =>
+              void api.updateSettings({ autoSkipAiSlop: !config.settings.autoSkipAiSlop })
+            }
+            onWhitelistArtist={(artistName) => void api.whitelistArtist(artistName)}
             onSearchInService={(svcId, q) => {
               if (nowPlayingMode === 'stage') setNowPlayingMode('drawer');
               void api.searchInService(svcId, q);
@@ -712,6 +747,7 @@ export function App() {
               setMixerTab('mixer');
               setModal('mixer');
             }}
+            onOpenAudibleDeck={() => setModal('audible-deck')}
             onToggleNowPlayingHub={() =>
               setNowPlayingMode((cur) => (cur === 'closed' ? 'drawer' : 'closed'))
             }
@@ -721,6 +757,52 @@ export function App() {
           />
         )}
       </div>
+
+      {modal === 'audible-deck' && (
+        <AudibleDeckModal
+          volume={runtime.audible?.volume ?? 1}
+          customSkipSec={config.settings.powerUps.audibleCustomSkipSec ?? 15}
+          sleepTimer={sleepTimer}
+          equalizer={config.settings.equalizer}
+          bookNotes={config.settings.bookNotes}
+          onClose={() => setModal('none')}
+          onControl={(action, value) => api.audibleDeckControl(action, value)}
+          onSetVolume={(vol) => void api.setVolume('audible', vol)}
+          onSetCustomSkipSec={(sec) => void api.updatePowerUps({ audibleCustomSkipSec: sec })}
+          onSetSleepTimer={(mins) => void api.setSleepTimer(mins)}
+          onToggleVoiceClarity={() => {
+            const isVocal =
+              config.settings.equalizer.enabled && config.settings.equalizer.preset === 'vocal';
+            void api.updateEqualizer(
+              isVocal
+                ? { enabled: false, preset: 'flat' }
+                : {
+                    enabled: true,
+                    preset: 'vocal',
+                    bands: [-3, -2, -1, 1, 3, 4, 4, 3, 1, -1],
+                  },
+            );
+          }}
+          onAddNote={(input) => void api.addBookNote(input)}
+          onRemoveNote={(noteId) => void api.removeBookNote(noteId)}
+          onOpenAudibleTab={() => {
+            setModal('none');
+            void api.selectService('audible');
+          }}
+        />
+      )}
+
+      {modal === 'twitch-multistream' && (
+        <TwitchMultiStreamModal
+          channels={config.settings.twitchMultiStreamChannels ?? []}
+          onSaveChannels={(chs) => void api.setTwitchMultiStreamChannels(chs)}
+          onOpenInMainTwitch={(ch) => {
+            setModal('none');
+            void api.openServiceUrl('twitch', `https://www.twitch.tv/${ch}`);
+          }}
+          onClose={() => setModal('none')}
+        />
+      )}
 
       {modal === 'palette' && (
         <CommandPalette

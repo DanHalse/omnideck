@@ -34,6 +34,7 @@ interface MediaDockProps {
   onToggleMute: (serviceId: string) => void;
   onSetVolume: (serviceId: string, volume: number) => void;
   onOpenMixer: () => void;
+  onOpenAudibleDeck?: () => void;
   onToggleNowPlayingHub: () => void;
   onToggleMiniPlayer: () => void;
   onTriggerPip: () => void;
@@ -63,6 +64,7 @@ export function MediaDock({
   onToggleMute,
   onSetVolume,
   onOpenMixer,
+  onOpenAudibleDeck,
   onToggleNowPlayingHub,
   onToggleMiniPlayer,
   onTriggerPip,
@@ -180,14 +182,25 @@ export function MediaDock({
           </div>
         )}
 
+        {npService?.id === 'audible' && onOpenAudibleDeck && (
+          <button
+            type="button"
+            className="pill-btn pill-btn--active"
+            title="Open Custom Dark-Mode Audible Player Deck"
+            onClick={onOpenAudibleDeck}
+          >
+            <span>🎧 Audible Deck</span>
+          </button>
+        )}
+
         <button
           type="button"
           className={`pill-btn ${nowPlayingOpen ? 'pill-btn--active' : ''}`}
-          title="AI Artist Info, Similar Bands & Synced Lyrics (Ctrl+Shift+N)"
+          title="Custom Music Deck, AI Artist Info & Synced Lyrics (Ctrl+Shift+N)"
           onClick={onToggleNowPlayingHub}
         >
           <SparklesIcon size={12} />
-          <span>Artist Hub</span>
+          <span>Music Deck</span>
         </button>
 
         <button

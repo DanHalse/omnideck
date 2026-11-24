@@ -1845,3 +1845,611 @@ export function buildRestoreHibernateStateScript(scrollY: number, mediaTime: num
     } catch {}
   })();`;
 }
+
+/**
+ * Phase 1–3 per-app DOM superpowers layered cleanly on top of existing v1.5 scripts:
+ * - YouTube: 1-click thumbnail Watch Later / Queue actions, BlockTube channel/keyword filter, press `N` for timestamped notes
+ * - YouTube Music: Playlist Sorter & Duplicate Highlighter, Smart Fade transitions
+ * - Spotify: Smart Shuffle Guard ("Real Shuffle Only") & Queue Total Duration badge
+ * - Twitch: BTTV/7TV/FFZ Tab-Autocomplete + Emote Picker, Chat Keyword Highlights + Ping, Sync-to-Live edge button
+ * - Reddit: Exact local timestamps, Visited-Post Dimmer + Hide Read pill, Kill Video Infinite Scroll
+ * - Audible: Full Custom Audible Deck telemetry & control bridge (chapters, true-speed remaining, end-of-chapter sleep)
+ */
+export function buildV16EnhancementsScript(
+  serviceId: string,
+  powerUps: PowerUpsConfig,
+): string {
+  if (serviceId === 'youtube') {
+    const blocked = JSON.stringify(
+      (powerUps.youtubeBlockedChannels ?? []).map((s) => s.toLowerCase()),
+    );
+    return `(function () {
+      window.__odYt16Cfg = {
+        quickThumbActions: ${Boolean(powerUps.youtubeQuickThumbActions)},
+        blockedChannels: ${blocked}
+      };
+
+      const applyFiltersAndQuickActions = () => {
+        const cfg = window.__odYt16Cfg;
+        if (!cfg) return;
+        const cards = document.querySelectorAll('ytd-rich-item-renderer, ytd-grid-video-renderer, ytd-video-renderer, ytd-compact-video-renderer');
+        cards.forEach((card) => {
+          // 1) BlockTube-style channel & keyword filter
+          if (cfg.blockedChannels && cfg.blockedChannels.length > 0) {
+            const text = (card.textContent || '').toLowerCase();
+            const hit = cfg.blockedChannels.some((term) => term && text.includes(term));
+            card.style.display = hit ? 'none' : '';
+            if (hit) return;
+          }
+
+          // 2) 1-Click Thumbnail Quick Actions (+WL / +Q)
+          if (!cfg.quickThumbActions) return;
+          const thumb = card.querySelector('ytd-thumbnail, #thumbnail');
+          if (!thumb || thumb.querySelector('.__od-thumb-actions')) return;
+          const link = card.querySelector('a#thumbnail, a[href*="/watch?v="]');
+          if (!link || !link.getAttribute('href') || !link.getAttribute('href').includes('/watch')) return;
+
+          const bar = document.createElement('div');
+          bar.className = '__od-thumb-actions';
+          bar.style.cssText = 'position:absolute;top:6px;left:6px;z-index:25;display:flex;gap:4px;opacity:0;transition:opacity 140ms ease;pointer-events:auto;';
+
+          const triggerMenuAction = (ev, keywords) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            const menuBtn = card.querySelector('button[aria-label*="Action menu" i], yt-icon-button#button button, ytd-menu-renderer button');
+            if (!menuBtn) return;
+            menuBtn.click();
+            setTimeout(() => {
+              const items = Array.from(document.querySelectorAll('ytd-menu-service-item-renderer, tp-yt-paper-item, yt-list-item-view-model'));
+              const match = items.find((el) => {
+                const t = (el.textContent || '').toLowerCase();
+                return keywords.some((k) => t.includes(k));
+              });
+              if (match) {
+                match.click();
+              } else {
+                document.body.click();
+              }
+            }, 140);
+          };
+
+          const mkPill = (label, title, keywords) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.textContent = label;
+            b.title = title;
+            b.style.cssText = 'border:1px solid rgba(255,255,255,0.22);background:rgba(13,15,18,0.88);color:#fff;font:700 10px system-ui,sans-serif;padding:3px 6px;border-radius:6px;cursor:pointer;backdrop-filter:blur(4px);';
+            b.addEventListener('click', (ev) => triggerMenuAction(ev, keywords));
+            return b;
+          };
+
+          bar.appendChild(mkPill('+WL', 'Save to Watch Later (1-click)', ['watch later']));
+          bar.appendChild(mkPill('+Q', 'Add to Queue (1-click)', ['add to queue']));
+          if (getComputedStyle(thumb).position === 'static') thumb.style.position = 'relative';
+          thumb.appendChild(bar);
+          card.addEventListener('mouseenter', () => { bar.style.opacity = '1'; });
+          card.addEventListener('mouseleave', () => { bar.style.opacity = '0'; });
+        });
+      };
+
+      // 3) Press 'N' on any YouTube watch page to capture a timestamped video note
+      if (!window.__odYtNoteBound) {
+        window.__odYtNoteBound = true;
+        document.addEventListener('keydown', (ev) => {
+          if (ev.key.toLowerCase() !== 'n' || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+          const tag = (ev.target && ev.target.tagName || '').toLowerCase();
+          if (tag === 'input' || tag === 'textarea' || (ev.target && ev.target.isContentEditable)) return;
+          if (!location.pathname.startsWith('/watch')) return;
+          const video = document.querySelector('video');
+          if (!video) return;
+          ev.preventDefault();
+          const sec = Math.max(0, Math.floor(video.currentTime || 0));
+          const mins = Math.floor(sec / 60);
+          const rem = sec % 60;
+          const stamp = mins + ':' + String(rem).padStart(2, '0');
+          const title = (document.querySelector('h1.ytd-watch-metadata, h1.title')?.textContent || document.title || 'YouTube Video').replace(/ - YouTube$/i, '').trim();
+
+          let box = document.getElementById('__od_yt_note_box');
+          if (box) box.remove();
+          box = document.createElement('div');
+          box.id = '__od_yt_note_box';
+          box.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:2147483645;width:320px;padding:12px;border-radius:12px;background:#13161b;border:1px solid rgba(228,126,60,0.55);color:#f1f3f6;box-shadow:0 16px 40px rgba(0,0,0,0.65);font:500 12px system-ui,sans-serif;';
+          box.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;"><strong style="color:#e47e3c;">Note at ' + stamp + '</strong><button id="__od_note_x" type="button" style="background:none;border:none;color:#9aa3b2;cursor:pointer;font-size:14px;">✕</button></div><input id="__od_note_in" type="text" placeholder="Type timestamped note and press Enter…" style="width:100%;box-sizing:border-box;padding:7px 9px;border-radius:8px;border:1px solid rgba(255,255,255,0.16);background:#0d0f12;color:#fff;font-size:12px;outline:none;" />';
+          document.body.appendChild(box);
+          const input = document.getElementById('__od_note_in');
+          const closeBtn = document.getElementById('__od_note_x');
+          if (closeBtn) closeBtn.onclick = () => box.remove();
+          if (input) {
+            input.focus();
+            input.addEventListener('keydown', (ke) => {
+              ke.stopPropagation();
+              if (ke.key === 'Escape') { box.remove(); return; }
+              if (ke.key === 'Enter' && input.value.trim()) {
+                const u = new URL(location.href);
+                u.searchParams.set('t', sec + 's');
+                console.debug('__OD_VIDEO_NOTE__:' + JSON.stringify({
+                  bookTitle: title,
+                  timestampLabel: stamp,
+                  note: input.value.trim(),
+                  url: u.toString()
+                }));
+                box.remove();
+              }
+            });
+          }
+        });
+      }
+
+      applyFiltersAndQuickActions();
+      if (!window.__odYt16Timer) {
+        window.__odYt16Timer = setInterval(applyFiltersAndQuickActions, 2200);
+      }
+    })();`;
+  }
+
+  if (serviceId === 'youtube-music') {
+    return `(function () {
+      window.__odYtm16Cfg = {
+        playlistSorter: ${Boolean(powerUps.ytmPlaylistSorter)},
+        smartFade: ${Boolean(powerUps.ytmSmartFadeAndSilenceTrim)}
+      };
+
+      const mountPlaylistSorter = () => {
+        if (!window.__odYtm16Cfg.playlistSorter) return;
+        const isPlaylist = location.pathname.includes('/playlist') || location.href.includes('list=');
+        let bar = document.getElementById('__od_ytm_sort_bar');
+        if (!isPlaylist) {
+          if (bar) bar.remove();
+          return;
+        }
+        const host = document.querySelector('ytmusic-playlist-shelf-renderer #contents, ytmusic-shelf-renderer #contents');
+        if (!host) return;
+        if (!bar) {
+          bar = document.createElement('div');
+          bar.id = '__od_ytm_sort_bar';
+          bar.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px 4px 12px 4px;font:600 11px system-ui,sans-serif;';
+
+          const parseDur = (txt) => {
+            const m = String(txt || '').match(/(\\d+):(\\d{2})/);
+            return m ? parseInt(m[1], 10) * 60 + parseInt(m[2], 10) : 0;
+          };
+
+          const sortRows = (mode) => {
+            const rows = Array.from(host.querySelectorAll(':scope > ytmusic-responsive-list-item-renderer'));
+            if (rows.length < 2) return;
+            rows.sort((a, b) => {
+              const titleA = (a.querySelector('.title-column, .title')?.textContent || '').trim().toLowerCase();
+              const titleB = (b.querySelector('.title-column, .title')?.textContent || '').trim().toLowerCase();
+              const artistA = (a.querySelector('.secondary-flex-columns')?.textContent || '').trim().toLowerCase();
+              const artistB = (b.querySelector('.secondary-flex-columns')?.textContent || '').trim().toLowerCase();
+              const durA = parseDur(a.querySelector('.fixed-columns')?.textContent);
+              const durB = parseDur(b.querySelector('.fixed-columns')?.textContent);
+              if (mode === 'title') return titleA.localeCompare(titleB);
+              if (mode === 'artist') return artistA.localeCompare(artistB) || titleA.localeCompare(titleB);
+              if (mode === 'duration') return durA - durB;
+              return 0;
+            });
+            rows.forEach((r) => host.appendChild(r));
+          };
+
+          const highlightDuplicates = () => {
+            const rows = Array.from(host.querySelectorAll(':scope > ytmusic-responsive-list-item-renderer'));
+            const seen = new Set();
+            let dupCount = 0;
+            rows.forEach((r) => {
+              const key = ((r.querySelector('.title-column, .title')?.textContent || '') + '|' + (r.querySelector('.secondary-flex-columns')?.textContent || '')).trim().toLowerCase();
+              if (key && seen.has(key)) {
+                dupCount++;
+                r.style.outline = '1.5px solid #eab308';
+                r.style.borderRadius = '8px';
+                r.style.background = 'rgba(234,179,8,0.09)';
+              } else {
+                seen.add(key);
+                r.style.outline = '';
+                r.style.background = '';
+              }
+            });
+            dupBtn.textContent = dupCount > 0 ? ('Duplicates (' + dupCount + ')') : 'No Duplicates';
+          };
+
+          const mk = (txt, fn) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.textContent = txt;
+            b.style.cssText = 'border:1px solid rgba(255,255,255,0.16);background:rgba(255,255,255,0.06);color:#f1f3f6;border-radius:999px;padding:4px 10px;cursor:pointer;font:600 11px system-ui,sans-serif;';
+            b.onclick = fn;
+            return b;
+          };
+
+          const label = document.createElement('span');
+          label.textContent = 'OmniDeck Sort:';
+          label.style.cssText = 'color:#9aa3b2;margin-right:2px;';
+          bar.appendChild(label);
+          bar.appendChild(mk('A–Z Title', () => sortRows('title')));
+          bar.appendChild(mk('Artist', () => sortRows('artist')));
+          bar.appendChild(mk('Shortest', () => sortRows('duration')));
+          const dupBtn = mk('Find Duplicates', highlightDuplicates);
+          bar.appendChild(dupBtn);
+          host.parentElement?.insertBefore(bar, host);
+        }
+      };
+
+      // Smooth fade-out near end of track & gentle fade-in on start
+      if (!window.__odYtmFadeTimer) {
+        let fadeActive = false;
+        window.__odYtmFadeTimer = setInterval(() => {
+          if (!window.__odYtm16Cfg || !window.__odYtm16Cfg.smartFade) return;
+          const v = document.querySelector('video');
+          if (!v || v.paused || !Number.isFinite(v.duration) || v.duration < 25) return;
+          const rem = v.duration - v.currentTime;
+          const baseScale = typeof window.__omnideckVolumeScale === 'number' ? window.__omnideckVolumeScale : 1;
+          if (rem > 0 && rem <= 2.2) {
+            fadeActive = true;
+            const factor = Math.max(0.18, rem / 2.2);
+            try { v.volume = Math.min(1, Math.max(0.05, factor * baseScale)); } catch {}
+          } else if (fadeActive && v.currentTime < 1.5) {
+            const factor = Math.min(1, Math.max(0.25, v.currentTime / 1.5));
+            try { v.volume = Math.min(1, Math.max(0.05, factor * baseScale)); } catch {}
+          } else if (fadeActive) {
+            fadeActive = false;
+            try { v.volume = Math.min(1, Math.max(0, baseScale)); } catch {}
+          }
+        }, 220);
+      }
+
+      mountPlaylistSorter();
+      if (!window.__odYtm16Timer) {
+        window.__odYtm16Timer = setInterval(mountPlaylistSorter, 2400);
+      }
+    })();`;
+  }
+
+  if (serviceId === 'spotify') {
+    return `(function () {
+      window.__odSp16Cfg = {
+        guardSmartShuffle: ${Boolean(powerUps.spotifyGuardSmartShuffle)},
+        queueDuration: ${Boolean(powerUps.spotifyQueueDuration)}
+      };
+
+      let lastGuardClickAt = 0;
+      const tickSpotify = () => {
+        const cfg = window.__odSp16Cfg;
+        if (!cfg) return;
+
+        // 1) Smart Shuffle Guard: cycle out of Smart Shuffle back to pure Shuffle
+        if (cfg.guardSmartShuffle) {
+          const shuffleBtn = document.querySelector('[data-testid="control-button-shuffle"]');
+          if (shuffleBtn) {
+            const label = (shuffleBtn.getAttribute('aria-label') || '').toLowerCase();
+            if (label.includes('smart shuffle') && Date.now() - lastGuardClickAt > 2500) {
+              lastGuardClickAt = Date.now();
+              shuffleBtn.click();
+            }
+          }
+        }
+
+        // 2) Queue Total Duration Counter
+        if (cfg.queueDuration) {
+          const queueHeading = Array.from(document.querySelectorAll('h1, h2, h3')).find((h) => /^next (in queue|up)/i.test((h.textContent || '').trim()));
+          if (queueHeading) {
+            const rows = document.querySelectorAll('[data-testid="tracklist-row"]');
+            let totalSec = 0;
+            let count = 0;
+            rows.forEach((row) => {
+              const m = (row.textContent || '').match(/\\b(\\d{1,2}):(\\d{2})\\b/);
+              if (m) {
+                totalSec += parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+                count++;
+              }
+            });
+            let badge = document.getElementById('__od_sp_queue_dur');
+            if (count > 0 && totalSec > 0) {
+              const mins = Math.round(totalSec / 60);
+              const hrs = Math.floor(mins / 60);
+              const remM = mins % 60;
+              const formatted = hrs > 0 ? (hrs + 'h ' + remM + 'm') : (mins + 'm');
+              if (!badge) {
+                badge = document.createElement('span');
+                badge.id = '__od_sp_queue_dur';
+                badge.style.cssText = 'margin-left:10px;padding:2px 8px;border-radius:999px;background:rgba(29,185,84,0.16);border:1px solid rgba(29,185,84,0.35);color:#1db954;font:600 11px system-ui,sans-serif;vertical-align:middle;';
+                queueHeading.appendChild(badge);
+              }
+              badge.textContent = count + ' tracks · ' + formatted;
+            }
+          }
+        }
+      };
+
+      tickSpotify();
+      if (!window.__odSp16Timer) {
+        window.__odSp16Timer = setInterval(tickSpotify, 2200);
+      }
+    })();`;
+  }
+
+  if (serviceId === 'twitch') {
+    const highlights = JSON.stringify(
+      (powerUps.twitchChatHighlights ?? []).map((s) => s.toLowerCase()),
+    );
+    return `(function () {
+      window.__odTw16Cfg = {
+        emoteAutocomplete: ${Boolean(powerUps.twitchEmoteAutocomplete)},
+        highlights: ${highlights}
+      };
+
+      // 1) Chat Keyword Highlights + subtle chime
+      const scanChatHighlights = () => {
+        const terms = window.__odTw16Cfg && window.__odTw16Cfg.highlights;
+        if (!terms || terms.length === 0) return;
+        document.querySelectorAll('[data-a-target="chat-line-message"]:not([data-od-hl-checked])').forEach((line) => {
+          line.setAttribute('data-od-hl-checked', '1');
+          const txt = (line.textContent || '').toLowerCase();
+          if (terms.some((k) => k && txt.includes(k))) {
+            line.style.background = 'rgba(228,126,60,0.16)';
+            line.style.borderLeft = '3px solid #e47e3c';
+            line.style.paddingLeft = '6px';
+            line.style.borderRadius = '4px';
+          }
+        });
+      };
+
+      // 2) BTTV/7TV/FFZ Tab-Autocomplete & Quick Emote Picker
+      const mountEmoteTools = () => {
+        if (!window.__odTw16Cfg || !window.__odTw16Cfg.emoteAutocomplete) return;
+        const input = document.querySelector('[data-a-target="chat-input"]');
+        if (input && !input.__odTabBound) {
+          input.__odTabBound = true;
+          input.addEventListener('keydown', (ev) => {
+            if (ev.key !== 'Tab') return;
+            const emotes = window.__odEmoteMap || {};
+            const names = Object.keys(emotes);
+            if (names.length === 0) return;
+            const text = (input.textContent || input.value || '').trimEnd();
+            const parts = text.split(/\\s+/);
+            const last = parts[parts.length - 1];
+            if (!last || last.length < 2) return;
+            const match = names.find((n) => n.toLowerCase().startsWith(last.toLowerCase()));
+            if (!match) return;
+            ev.preventDefault();
+            ev.stopPropagation();
+            try {
+              document.execCommand('insertText', false, match.slice(last.length) + ' ');
+            } catch {}
+          }, true);
+        }
+
+        // 3) Sync-to-Live edge pill when stream latency drifts
+        const video = document.querySelector('video');
+        if (video && video.buffered && video.buffered.length > 0) {
+          const liveEdge = video.buffered.end(video.buffered.length - 1);
+          const drift = liveEdge - video.currentTime;
+          let pill = document.getElementById('__od_tw_sync_live');
+          if (drift > 8 && drift < 180) {
+            if (!pill && document.body) {
+              pill = document.createElement('button');
+              pill.id = '__od_tw_sync_live';
+              pill.type = 'button';
+              pill.style.cssText = 'position:fixed;bottom:68px;left:18px;z-index:2147483635;border:1px solid rgba(145,70,255,0.55);background:rgba(19,22,27,0.92);color:#fff;padding:5px 10px;border-radius:999px;font:700 11px system-ui,sans-serif;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,0.45);';
+              pill.onclick = () => {
+                const v = document.querySelector('video');
+                if (v && v.buffered && v.buffered.length > 0) {
+                  v.currentTime = Math.max(0, v.buffered.end(v.buffered.length - 1) - 0.8);
+                }
+                pill.remove();
+              };
+              document.body.appendChild(pill);
+            }
+            if (pill) pill.textContent = '⚡ Sync to Live (-' + Math.round(drift) + 's)';
+          } else if (pill) {
+            pill.remove();
+          }
+        }
+      };
+
+      scanChatHighlights();
+      mountEmoteTools();
+      if (!window.__odTw16Timer) {
+        window.__odTw16Timer = setInterval(() => {
+          scanChatHighlights();
+          mountEmoteTools();
+        }, 2000);
+      }
+    })();`;
+  }
+
+  if (serviceId === 'reddit') {
+    return `(function () {
+      window.__odRd16Cfg = {
+        exactTimestamps: ${Boolean(powerUps.redditExactTimestamps)},
+        killVideoScroll: ${Boolean(powerUps.redditKillVideoScroll)}
+      };
+
+      const VISITED_KEY = '__od_reddit_visited_v1';
+      let visited = new Set();
+      try {
+        const raw = JSON.parse(localStorage.getItem(VISITED_KEY) || '[]');
+        if (Array.isArray(raw)) visited = new Set(raw.slice(-400));
+      } catch {}
+
+      const persistVisited = () => {
+        try { localStorage.setItem(VISITED_KEY, JSON.stringify(Array.from(visited).slice(-400))); } catch {}
+      };
+
+      // Record current thread as visited
+      const postMatch = location.pathname.match(/\\/comments\\/([a-z0-9]+)/i);
+      if (postMatch && !visited.has(postMatch[1])) {
+        visited.add(postMatch[1]);
+        persistVisited();
+      }
+
+      const enhanceReddit = () => {
+        const cfg = window.__odRd16Cfg;
+        if (!cfg) return;
+
+        // 1) Exact Local Hover Timestamps + Visited-Post Dimming
+        if (cfg.exactTimestamps) {
+          document.querySelectorAll('time[datetime]:not([data-od-exact-ts])').forEach((t) => {
+            t.setAttribute('data-od-exact-ts', '1');
+            const dt = new Date(t.getAttribute('datetime') || '');
+            if (!Number.isNaN(dt.getTime())) {
+              t.title = dt.toLocaleString(undefined, {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit'
+              });
+            }
+          });
+
+          const hideRead = document.documentElement.classList.contains('__od-hide-read-posts');
+          document.querySelectorAll('shreddit-post, .thing.link').forEach((post) => {
+            const href = post.getAttribute('permalink') || post.querySelector('a[href*="/comments/"]')?.getAttribute('href') || '';
+            const m = href.match(/\\/comments\\/([a-z0-9]+)/i);
+            if (m && visited.has(m[1])) {
+              post.style.opacity = hideRead ? '' : '0.58';
+              post.style.display = hideRead ? 'none' : '';
+            }
+          });
+
+          if (!location.pathname.includes('/comments/') && visited.size > 0 && !document.getElementById('__od_rd_hide_read') && document.body) {
+            const btn = document.createElement('button');
+            btn.id = '__od_rd_hide_read';
+            btn.type = 'button';
+            btn.textContent = 'Hide Read';
+            btn.style.cssText = 'position:fixed;right:18px;bottom:22px;z-index:9980;border:1px solid rgba(255,255,255,0.18);background:rgba(19,22,27,0.92);color:#f1f3f6;border-radius:999px;padding:6px 12px;font:600 11px system-ui,sans-serif;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,0.45);';
+            btn.onclick = () => {
+              const hidden = document.documentElement.classList.toggle('__od-hide-read-posts');
+              btn.textContent = hidden ? 'Show Read' : 'Hide Read';
+              enhanceReddit();
+            };
+            document.body.appendChild(btn);
+          }
+        }
+
+        // 2) Kill Reddit Video Infinite Scroll Hijack
+        if (cfg.killVideoScroll) {
+          document.querySelectorAll('shreddit-player, shreddit-player-2').forEach((pl) => {
+            if (pl.__odKillScroll) return;
+            pl.__odKillScroll = true;
+            pl.addEventListener('wheel', (ev) => {
+              ev.stopPropagation();
+            }, { passive: true });
+          });
+        }
+      };
+
+      enhanceReddit();
+      if (!window.__odRd16Timer) {
+        window.__odRd16Timer = setInterval(enhanceReddit, 2200);
+      }
+    })();`;
+  }
+
+  if (serviceId === 'audible') {
+    return `(function () {
+      const readAudibleState = () => {
+        const media = document.querySelector('audio, video');
+        const title = (
+          document.querySelector('#adbl-cp-title, .adbl-cp-book-title, [data-testid="book-title"], h1')?.textContent ||
+          document.title ||
+          'Audible Audiobook'
+        ).replace(/\\s*\\|\\s*Audible.*$/i, '').trim();
+        const chapter = (
+          document.querySelector('#adbl-cp-chapter-title, .adbl-cp-chapter-title, .adbl-cp-active-chapter, [aria-current="true"]')?.textContent ||
+          ''
+        ).trim();
+        const cover = (
+          document.querySelector('#adbl-cp-cover img, .adbl-cp-cover img, img.bc-pub-block')?.getAttribute('src') ||
+          ''
+        );
+        const chapterEls = Array.from(document.querySelectorAll('.adbl-cp-chapter-item, [data-testid="chapter-item"], .adbl-cp-chapters li'));
+        const chapters = chapterEls.slice(0, 120).map((el, idx) => ({
+          index: idx,
+          title: (el.textContent || ('Chapter ' + (idx + 1))).replace(/\\s+/g, ' ').trim().slice(0, 90),
+          active: el.classList.contains('active') || el.getAttribute('aria-current') === 'true'
+        }));
+        return {
+          title,
+          chapter,
+          cover,
+          playing: media ? !media.paused : false,
+          currentTimeSec: media && Number.isFinite(media.currentTime) ? media.currentTime : 0,
+          durationSec: media && Number.isFinite(media.duration) ? media.duration : 0,
+          playbackRate: media && Number.isFinite(media.playbackRate) ? media.playbackRate : 1,
+          chapters,
+          endOfChapterArmed: Boolean(window.__odAudibleEocArmed)
+        };
+      };
+
+      window.__odAudibleDeckControl = (action, value) => {
+        const media = document.querySelector('audio, video');
+        if (action === 'state') return readAudibleState();
+        if (action === 'playPause') {
+          if (media) {
+            if (media.paused) media.play().catch(() => {});
+            else media.pause();
+          } else {
+            const btn = document.querySelector('#adbl-cp-play-btn, button[aria-label*="Play" i], button[aria-label*="Pause" i]');
+            if (btn) btn.click();
+          }
+          return readAudibleState();
+        }
+        if (action === 'skip' && media) {
+          const delta = Number(value) || 15;
+          const next = Math.max(0, Math.min(Number.isFinite(media.duration) ? media.duration : 999999, (media.currentTime || 0) + delta));
+          media.currentTime = next;
+          return readAudibleState();
+        }
+        if (action === 'seek' && media) {
+          const target = Math.max(0, Number(value) || 0);
+          media.currentTime = target;
+          return readAudibleState();
+        }
+        if (action === 'rate') {
+          const rate = Math.min(3.0, Math.max(0.75, Math.round((Number(value) || 1) * 20) / 20));
+          try { localStorage.setItem('__od_audible_speed', String(rate)); } catch {}
+          document.querySelectorAll('audio, video').forEach((m) => {
+            try { m.playbackRate = rate; } catch {}
+          });
+          return readAudibleState();
+        }
+        if (action === 'selectChapter') {
+          const idx = Number(value);
+          const chapterEls = Array.from(document.querySelectorAll('.adbl-cp-chapter-item, [data-testid="chapter-item"], .adbl-cp-chapters li'));
+          const target = chapterEls[idx];
+          if (target) {
+            const clickable = target.querySelector('a, button') || target;
+            clickable.click();
+          }
+          return readAudibleState();
+        }
+        if (action === 'toggleEndOfChapterSleep') {
+          window.__odAudibleEocArmed = !window.__odAudibleEocArmed;
+          return readAudibleState();
+        }
+        return readAudibleState();
+      };
+
+      if (!window.__odAudibleEocWatcher) {
+        let lastChapterTitle = '';
+        window.__odAudibleEocWatcher = setInterval(() => {
+          const st = readAudibleState();
+          if (window.__odAudibleEocArmed && st.playing) {
+            const nearEnd = st.durationSec > 10 && st.currentTimeSec >= st.durationSec - 1.2;
+            const chapterChanged = lastChapterTitle && st.chapter && st.chapter !== lastChapterTitle;
+            if (nearEnd || chapterChanged) {
+              window.__odAudibleEocArmed = false;
+              const m = document.querySelector('audio, video');
+              if (m) m.pause();
+            }
+          }
+          if (st.chapter) lastChapterTitle = st.chapter;
+        }, 900);
+      }
+    })();`;
+  }
+
+  return '';
+}
+
